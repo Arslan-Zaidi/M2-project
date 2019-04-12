@@ -1,0 +1,740 @@
+---
+title: "mutation_spectrum"
+author: "Arslan Zaidi"
+date: "1/29/2019"
+bibliography: mutation_spectrum_01292019.bib
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, cache=TRUE}
+library(ggplot2)
+library(data.table)
+library(ape)
+library(Biostrings)
+library(dplyr)
+library(ggrepel)
+library(tidyr)
+library(kableExtra)
+library(circlize)
+
+
+```
+
+
+### Assign 'ancestral' state to heteroplasmies
+
+To study the mutation spectrum, we needed to polarize the heteroplasmies, i.e., identify the ancestral/original and mutant states for each heteroplasmy. We do this by examining the frequency and allelic states across samples from the family. 
+
+First, we find heteroplasmies, which have the same major allele across all samples in the family. We can say with some confidence that these major alleles are likely the ancestral states of the heteroplasmy. 
+
+```{r anc_major}
+
+#read allfam file with adjusted frequency added for allelic consistency across family members
+allfam<-fread("~/Documents/mtproj_files/M2_new/files/Database/Heteroplasmy_tables/hq_counts_adj_frequency_09272018.txt",header=T,sep="\t")
+
+#separate heteroplasmies into a table
+hq<-allfam%>%
+  filter(heteroplasmy=="yes")
+
+#determine the 'ancestral' and 'mutant' allele for each heteroplasmy
+
+#determine if all family members have the same major allele in the family for a site
+#if the major allele is the same, that's the 'ancestral' allele
+hq.majors<-allfam%>%
+  select(FID,position,major)%>%
+  group_by(FID,position)%>%
+  summarize(maj=paste(unique(major),collapse=","))%>%
+  separate(maj,c("maj1","maj2"),sep=",")
+
+#select rows where there is only one major allele
+hq.major.1<-hq.majors%>%
+  filter(is.na(maj2)=="TRUE")%>%
+  mutate(fam_het_id=paste(FID,position,sep="_"))
+
+##### assign 'ancestral' and 'mutant' alleles to hq
+#for cases where the major allele is the same across families, 
+#the ancestral allele is the major allele and the mutant allele is the minor allele
+hq.1<-hq%>%
+  filter(fam_het_id%in%hq.major.1$fam_het_id)%>%
+  mutate(ancestral=major)%>%
+  mutate(mutant=minor)
+
+```
+
+Then we manually examine cases where the major allele is different across samples from the same family.
+
+```{r anc_discordant}
+
+#select rows where there are two major alleles - 
+#these are cases where the major allele differs among samples from the same family
+hq.major.2<-hq.majors%>%
+  filter(is.na(maj2)=="FALSE")%>%
+  mutate(fam_het_id=paste(FID,position,sep="_"))
+
+#manually investigate these cases
+allele.discordance<-allfam%>%
+  filter(fam_het_id%in%hq.major.2$fam_het_id)%>%
+  select(FID,position,level,tissue,major)%>%
+  spread(level,major)
+
+kable(allele.discordance)%>%
+    kable_styling() %>%
+  scroll_box(width = "100%")
+
+```
+
+We assigned ancestral and mutant alleles to these special cases based on manual inpsection. For some, we were unable to determine the ancestral state as the pattern was not clear. These were labeled "Undetermined" and were not included in the mutation spectrum analyses. 
+```{r manual_ancestral}
+#for cases where the major allele is not the same across families, 
+#assign ancestral and mutant alleles based on manual inpsection above
+hq.2<-hq%>%
+  filter(fam_het_id%in%hq.major.2$fam_het_id)%>%
+  mutate(ancestral=case_when(fam_het_id=="F140_12192"~"undetermined",
+                             fam_het_id=="F193_5277"~"T",
+                             fam_het_id=="F193_13359"~"G",
+                             fam_het_id=="F194_234"~"A",
+                             fam_het_id=="F235_195"~"T",
+                             fam_het_id=="F274_214"~"A",
+                             fam_het_id=="F281_6125"~"A",
+                             fam_het_id=="F281_16318"~"G",
+                             fam_het_id=="F327_11635"~"C",
+                             fam_het_id=="F342_16111"~"T",
+                             fam_het_id=="F343_3243"~"undetermined",
+                             fam_het_id=="F343_5539"~"undetermined",
+                             fam_het_id=="FM_2352"~"C"),
+         mutant=case_when(fam_het_id=="F140_12192"~"undetermined",
+                          fam_het_id=="F193_5277"~"C",
+                          fam_het_id=="F193_13359"~"A",
+                          fam_het_id=="F194_234"~"G",
+                          fam_het_id=="F235_195"~"C",
+                          fam_het_id=="F274_214"~"G",
+                          fam_het_id=="F281_6125"~"G",
+                          fam_het_id=="F281_16318"~"A",
+                          fam_het_id=="F327_11635"~"T",
+                          fam_het_id=="F342_16111"~"C",
+                          fam_het_id=="F343_3243"~"undetermined",
+                          fam_het_id=="F343_5539"~"undetermined",
+                          fam_het_id=="FM_2352"~"T"))
+
+#combined in one dataframe
+hq<-rbind(hq.1,hq.2)
+
+```
+
+### Heteroplasmy summary statistics
+
+Let's calculate some summary statistics from the heteropasmy data. 
+
+```{r sum_stats}
+#number of unique sites
+uniq_sites=hq%>%
+  pull(position)%>%
+  unique()
+
+print(length(uniq_sites))
+
+#tabulate number of families that carry a heteroplasmy at each site
+uniq_sites_fam<-hq%>%
+  group_by(position)%>%
+  summarize(nfams=length(unique(FID)))
+
+uniq_sites_fam
+
+#how many sites are present in one family only
+uniq_sites_fam%>%
+  filter(nfams==1)%>%
+  nrow()
+
+#how many sites are present in >3 families
+uniq_sites_fam%>%
+  filter(nfams>=3)%>%
+  nrow()
+
+#which sites are these?
+uniq_sites_fam%>%
+  filter(nfams>=3)%>%
+  pull(position)
+
+```
+
+### Determine sequence context
+
+Next, we determined the trinucleotide sequence context of each heteroplasmy. This was done by getting the full sequence of each sample from the "count" file, which contains info on the observed number of each of the four nucleotides at each position.
+
+```{r seq_context,cache=TRUE}
+#load count file
+count<-fread("../../../files/Analysis/variant_calling/trim.rd.counts/Allruns_08222018.trim.rd.counts",header=F,sep="\t")
+colnames(count)<-c('fqid','ref','position','A','C','G','T','a','c','g','t','cvrg','nalleles','major','minor','maf')
+
+#write function to get sequence context from count file
+get.context<-function(fq.id,pos,M){
+  #fq.id is a string for the fastq id
+  #pos is numeric -site position on rcrs
+  #M is a string - ancestral allele - as a check
+  subcount<-count%>%
+    filter(fqid==fq.id & position%in%c(pos-1,pos,pos+1))%>%
+    select(position,major,minor)
+  if(subcount$major[2]==M){
+    context<-paste(subcount$major,collapse="")}
+  if(subcount$minor[2]==M){
+    context<-paste(subcount$major[1],subcount$minor[2],subcount$major[3],sep="")
+  }
+  return(context)
+}
+
+#extract context of major allele for each heteroplasmy
+hq$context<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  if(hq$ancestral[i]!="undetermined"){
+    if(hq$ancestral[i]==hq$major[i]){
+      hq$context[i]<-get.context(hq$fqid[i],hq$position[i],hq$major[i])
+    }
+    if(hq$ancestral[i]==hq$minor[i]){
+      hq$context[i]<-get.context(hq$fqid[i],hq$position[i],hq$minor[i])
+    }
+  }
+  if(hq$ancestral[i]=="undetermined"){
+    hq$context[i]<-get.context(hq$fqid[i],hq$position[i],hq$major[i])
+  }
+  #setTxtProgressBar(pb,i)
+}
+
+
+```
+
+Now, we recode the alleles such that the ancestral states are all pyrmidines. This is purely for standardization sake. 
+
+```{r standard_pyr}
+
+#recode alleles so ancestral allele is a pyrmidine - for mutational signatures
+hq$ancestral.py<-NA
+hq$mutant.py<-NA
+hq$context.py<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  if(hq$ancestral[i]%in%c("G","A")){
+    hq$ancestral.py[i]<-as.character(Biostrings::complement(DNAString(hq$ancestral[i])))
+    hq$mutant.py[i]<-as.character(Biostrings::complement(DNAString(hq$mutant[i])))
+    hq$context.py[i]<-as.character(Biostrings::reverseComplement(DNAString(hq$context[i])))
+  }
+  if(hq$ancestral[i]%in%c("C","T")){
+    hq$ancestral.py[i]<-hq$ancestral[i]
+    hq$mutant.py[i]<-hq$mutant[i]
+    hq$context.py[i]<-hq$context[i]
+  }
+  #setTxtProgressBar(pb,i)
+}
+
+#label mutation type (e.g. C>T)
+hq2<-hq%>%
+  mutate(mutation=case_when(ancestral!="undetermined"~paste(ancestral.py,">",mutant.py,sep="")))
+
+```
+
+Summarize the mutation spectrum. Specifically, measure the number of each mutation type observed in our data. A heteroplasmy that exists in multiple samples from the same family is treated as a single mutation (representing a single mutation event).
+
+```{r summarize}
+
+#summarize for each mutation type and context, the number of observed heteroplasmies
+#count a heteroplasmy in each family as independent but only once
+dhq<-hq2%>%
+  filter(is.na(context.py)=="FALSE")%>%
+  distinct(FID,position,.keep_all = T)%>%
+  group_by(mutation,context.py)%>%
+  summarize(nhets=length(which(maf>0.01)))
+
+
+#change dataframe with all 96 mutation types
+mut96<-data.frame(expand.grid(c("A","C","G","T"),
+                              c("C>A","C>G","C>T",
+                                "T>A","T>C","T>G"),
+                              c("A","C","G","T")))
+
+colnames(mut96)<-c("p5","mutation","p3")
+mut96<-mut96%>%
+  group_by(mutation)%>%
+  mutate(context.py=paste(p5,unlist(strsplit(as.character(mutation),split=""))[1],p3,sep=""))
+
+dhq2<-left_join(mut96,dhq,by=c("context.py","mutation"))%>%
+  mutate(nhets=replace(nhets,is.na(nhets)=="TRUE",0))
+  
+#plot mutation context
+context.plt<-ggplot(dhq2,aes(context.py,nhets,fill=mutation))+
+  geom_bar(stat="identity",color="white")+
+  facet_grid(.~mutation,scales = "free_x")+
+  theme_bw(base_size=12)+
+  theme(axis.text.x=element_text(angle=90,family="mono",size=10),
+        panel.grid.major.x=element_blank(),
+        panel.spacing.x = unit(0.1,"lines"),
+        axis.title=element_text(size=16),
+        axis.text.y=element_text(size=14),
+        strip.text = element_text(size=12),
+        legend.position = "none")+
+  labs(x="Sequence context",y="Count",fill="Mutation")
+
+#fwrite(hq2,"../../../files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_annotation_11282018.txt",sep="\t",col.names=T,row.names=F,quote=F)
+
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/mutation_spectrum//hq_mutation_context_01292019.pdf",context.plt,height=4,width=10)
+
+context.plt
+
+```
+
+
+### Synonymous/non-synonymous annotation of heteroplasmies
+
+Based on whether or not a mutaiton affects the protein sequence, we can annotate it as synonymous or non-synonymous. Also assign each heteroplasmy to a specific gene in the mtDNA. 
+
+```{r syn_annot,cache=TRUE}
+
+#read reference genome rcrs
+rcrs<-read.dna("../../../files/Database/rcrs.fasta",format="fasta")
+
+#mt.code
+mt.code<-getGeneticCode("2")
+
+#load genbank file - rcrs annotation for genes
+genedb<-fread("../../../files/Database/genedb.txt",header=T)
+
+#filter only coding sequences
+genedb2<-genedb%>%
+  filter(class=="CDS")
+
+#get vertebrate MT genz
+
+#annotate each heteroplasmy by which gene it's present in
+hq$gene<-NA
+for(i in 1:nrow(genedb)){
+  hq$gene[which(hq$position>=genedb$start[i] & hq$position<=genedb$end[i])]<-genedb$gene[i]
+}
+
+#write function to calculate nsyn sites and syn sites for a single codon
+nei.sites<-function(codon){
+  aa<-Biostrings::translate(DNAString(codon),mt.code)
+  codon<-unlist(strsplit(codon,split=""))
+  s<-0
+  for(k in 1:3){
+    nucs<-setdiff(c("a","c","g","t"),codon[k])
+    for(l in 1:3){
+      mut.codon<-codon
+      mut.codon[k]<-nucs[l]
+      mt.aa<-Biostrings::translate(DNAString(paste(mut.codon,collapse="")),mt.code)
+      if(mt.aa==aa){s<-s+1/3}else{s<-s}
+    }
+  }
+  n<-3-s
+  return(c(syn.sites=s,nsyn.sites=n))
+}
+
+#write function to return fold degeneracy for a site in a given codon
+fold.degeneracy<-function(codon,site){
+  aa<-Biostrings::translate(DNAString(codon),mt.code)
+  codon<-unlist(strsplit(codon,split=""))
+  nucs<-setdiff(c("a","c","g","t"),codon[site])
+  s<-1
+  for(l in 1:3){
+    mut.codon<-codon
+    mut.codon[site]<-nucs[l]
+    mt.aa<-translate(DNAString(paste(mut.codon,collapse="")),mt.code)
+    if(mt.aa==aa){s<-s+1}else{s<-s}
+  }
+  #if all 3 substitutions are nonsynonymous, site is 4-fold denegerate
+  return(s)
+}
+
+#calculate a number of things (e.g. fold degeneracy etc.)
+hq$hq.gene.pos<-NA
+hq$hq.codon.pos<-NA
+hq$major.codon<-NA
+hq$minor.codon<-NA
+hq$major.aa<-NA
+hq$minor.aa<-NA
+hq$fold.d<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  #hq$context.major[i]<-paste(as.character(rcrs[(hq$position[i]-1)]),hq$major[i],as.character(rcrs[(hq$position[i]+1)]),sep="")
+  #hq$context.minor[i]<-paste(as.character(rcrs[(hq$position[i]-1)]),hq$minor[i],as.character(rcrs[(hq$position[i]+1)]),sep="")
+  gene.name<-hq$gene[i]
+  if(gene.name%in%genedb2$gene){
+    gene.start<-genedb$start[which(genedb$gene==hq$gene[i])]+1
+    gene.end<-genedb$end[which(genedb$gene==hq$gene[i])]
+    gene.seq<-as.character(rcrs[(gene.start):(gene.end)])
+    gene.strand<-genedb$strand[which(genedb$gene==hq$gene[i])]
+    #hq.gene.pos<-hq$position[i]-(gene.start-1)
+    if(gene.strand==1){
+      hq.gene.pos<-hq$position[i]-(gene.start-1)
+      if(hq.gene.pos%%3==0){
+        hq.codon<-hq.gene.pos/3
+        hq.codon.pos<-3
+        hq$hq.codon.pos[i]<-3
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-2,hq.gene.pos-1,hq.gene.pos)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==1){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-1
+        hq$hq.codon.pos[i]<-1
+        hq.codon.seq<-gene.seq[c(hq.gene.pos,hq.gene.pos+1,hq.gene.pos+2)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==2){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-2
+        hq$hq.codon.pos[i]<-2
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-1,hq.gene.pos,hq.gene.pos+1)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      hq.major.seq<-hq.minor.seq<-hq.codon.seq
+      hq.major.seq[hq.codon.pos]<-as.character(hq$major[i])
+      hq.minor.seq[hq.codon.pos]<-as.character(hq$minor[i])
+      hq.major.aa<-as.character(translate(DNAString(paste(hq.major.seq,collapse="")),mt.code))
+      hq.minor.aa<-as.character(translate(DNAString(paste(hq.minor.seq,collapse="")),mt.code))
+      
+    }
+    if(gene.strand== -1){
+      gene.seq<-reverseComplement(DNAString(paste(gene.seq,collapse="")))
+      gene.seq<-unlist(strsplit(as.character(gene.seq),split=""))
+      hq.gene.pos<-gene.end-(hq$position[i]-1)
+      if(hq.gene.pos%%3==0){
+        hq.codon<-hq.gene.pos/3
+        hq.codon.pos<-3
+        hq$hq.codon.pos[i]<-3
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-2,hq.gene.pos-1,hq.gene.pos)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==1){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-1
+        hq$hq.codon.pos[i]<-1
+        hq.codon.seq<-gene.seq[c(hq.gene.pos,hq.gene.pos+1,hq.gene.pos+2)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==2){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-2
+        hq$hq.codon.pos[i]<-2
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-1,hq.gene.pos,hq.gene.pos+1)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      hq.major.seq<-hq.minor.seq<-hq.codon.seq
+      major<-complement(DNAString(hq$major[i]))
+      minor<-complement(DNAString(hq$minor[i]))
+      hq.major.seq[hq.codon.pos]<-as.character(major)
+      hq.minor.seq[hq.codon.pos]<-as.character(minor)
+      hq.major.aa<-as.character(translate(DNAString(paste(hq.major.seq,collapse="")),mt.code))
+      hq.minor.aa<-as.character(translate(DNAString(paste(hq.minor.seq,collapse="")),mt.code))
+    }
+    hq$fold.d[i]<-fold.d
+    hq$hq.gene.pos[i]<-hq.gene.pos
+    hq$major.codon[i]<-paste(tolower(hq.major.seq),collapse="")
+    hq$minor.codon[i]<-paste(tolower(hq.minor.seq),collapse="")
+    hq$major.aa[i]<-hq.major.aa
+    hq$minor.aa[i]<-hq.minor.aa
+  }
+  #setTxtProgressBar(pb,i)
+}
+
+hq$syn<-NA
+hq$syn[which(hq$major.aa==hq$minor.aa)]<-"syn"
+hq$syn[which(hq$major.aa!=hq$minor.aa)]<-"nsyn"
+
+#write synonymous and non-synonymous information
+hq.syn<-hq%>%
+  select(FID,fqid,position,fq_het_id,major,minor,maf,run,gene,hq.gene.pos,hq.codon.pos,major.codon,minor.codon,major.aa,minor.aa,syn,fold.d,ancestral,mutant,context,ancestral.py,mutant.py,context.py)
+
+#fwrite(hq,"../../../files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_syn_11282018.txt",sep="\t",col.names=T,row.names=F,quote=F)
+
+
+
+```
+
+Calculate no. of synonymous and non-synonymous heteroplasmies in each gene in our data. 
+
+```{r syn_number,cache=TRUE}
+
+#calculate total number of syn/nsyn mutations in every gene
+dhq.syn<-as.data.frame(hq.syn%>%
+  filter(duplicated(fq_het_id)=="FALSE" & gene%in%genedb2$gene)%>%
+  group_by(gene,syn)%>%
+  summarize(nhets=length(FID)))
+
+#COX2 has no non-synonymous changes - add row for plotting/calculations
+dhq.syn<-rbind(dhq.syn,data.frame(gene="COX2",syn="nsyn",nhets=0))
+#add rcrs for plotting
+rcrs_syn=sum(dhq.syn$nhets[which(dhq.syn$syn=="syn")])
+rcrs_nsyn=sum(dhq.syn$nhets[which(dhq.syn$syn=="nsyn")])
+
+dhq.syn<-rbind(dhq.syn,data.frame(gene=c("rcrs","rcrs"),syn=c("nsyn","syn"),nhets=c(rcrs_nsyn,rcrs_syn)))
+
+#calculate total number of mutations by mutation type in coding sequences
+hq.spectrum<-hq.syn%>%
+  filter(duplicated(fq_het_id)=="FALSE" & 
+           gene%in%genedb2$gene &
+           is.na(ancestral)=="FALSE")%>%
+  group_by(gene,ancestral,mutant)%>%
+  summarize(nhets=length(FID))
+
+```
+
+Now, calculate number of synonymous and non-synonymous sites in each gene.
+
+```{r syn_ref,cache=TRUE}
+
+
+#calculate no. of syn and nysn sites in mtDNA
+genedb2$syn.sites<-NA
+genedb2$nsyn.sites<-NA
+
+#apply this function to all codons for every gene
+for(i in 1:nrow(genedb2)){
+  gene.start<-genedb2$start[i]+1
+  gene.end<-genedb2$end[i]
+  gene.seq<-as.character(rcrs[c(gene.start:gene.end)])
+  if(genedb2$strand[i]==1){gene.seq<-gene.seq}
+  if(genedb2$strand[i]==-1){
+    gene.seq<-tolower(unlist(strsplit(as.character(reverseComplement(DNAString(paste(gene.seq,collapse="")))),split="")))}
+  if(length(gene.seq)%%3==0){
+    gene.seq<-gene.seq
+  }
+  if(length(gene.seq)%%3==1){
+    gene.seq<-c(gene.seq,"a","a")
+  }
+  if(length(gene.seq)%%3==2){
+    gene.seq<-c(gene.seq,"a")
+  }
+  gene.codons<-seqinr::splitseq(gene.seq,0,3)
+  #print(genedb2$gene[i])
+
+  nsites<-sapply(gene.codons,nei.sites)
+  nsites<-apply(nsites,1,sum)
+  genedb2$syn.sites[i]<-nsites[1]
+  genedb2$nsyn.sites[i]<-nsites[2]
+  genedb2$seq[i]<-paste(gene.seq,collapse="")
+}
+
+#convert genedb2 to long format for plotting and merging with hq object
+dgenedb.syn<-genedb2%>%
+  select(gene,syn.sites,nsyn.sites)%>%
+  melt(id.vars="gene",variable.name="synonymity",value.name="nsites")%>%
+  mutate(syn=case_when(synonymity=="syn.sites"~"syn",
+                       synonymity=="nsyn.sites"~"nsyn"))
+
+#add rcrs to dgene.db
+rcrs_ssites<-sum(dgenedb.syn$nsites[which(dgenedb.syn$syn=="syn")])
+rcrs_nsites<-sum(dgenedb.syn$nsites[which(dgenedb.syn$syn=="nsyn")])
+
+dgenedb.syn<-rbind(dgenedb.syn,data.frame(gene=c("rcrs","rcrs"),
+                                          synonymity=c("nsyn.sites","syn.sites"),
+                                          nsites=c(rcrs_nsites,rcrs_ssites),
+                                          syn=c("nsyn","syn")))
+
+#merged dhq.syn and dgenedb.syn
+dmerged<-merge(dhq.syn,dgenedb.syn,by=c("gene","syn"))
+
+```
+
+Calculate hN/hS - where hN is the ratio of the observed number of non-synonymous heteroplasmies and the number of non-synonymous sites. hS is the ratio of the observed number of synonymous heteroplasmies and the number of synonymous sites. hN/hS=1 is the neutral expectation. 
+
+```{r }
+
+#calculate hN/hS
+dmerged<-dmerged%>%
+  mutate(prop=nhets/nsites)%>%
+  mutate(k=prop)
+  #mutate(k=-0.75*log(1- (4/3 * prop)))
+
+mdmerged<-dmerged%>%
+  dcast(gene~syn,value.var="k")%>%
+  mutate(hn_hs=nsyn/syn)
+
+```
+
+To test whether the observed values of hN/hS are significantly different from 1, we used a bootstrap method from Stoneking paper (Li 2015). The algorithm is as follows:
+
+1. Calculate the observed distribution of heteroplasmies per mutation type (e.g. A>G observed 9 times, C>T observed 4 times etc.)
+
+2. 'Mutate' the rCRS using this spectrum of heteroplasmis. For example, mutate 9 randomly picked As to Gs because that's how many A>G mutations were observed. 
+
+3. Calculate hN/hS. 
+
+4. Repeat steps 2 and 3 1,000 times to generate a null distribution for hN/hS. 
+
+
+```{r hn_hs_boot, cache=TRUE}
+
+genedb3<-genedb2%>%
+  filter(gene!="ND4L")
+
+#define function to do this for each gene
+dnds.boot<-function(gn){
+  if(gn=="rcrs"){
+    total_mutations=sum(hq.spectrum$nhets)
+    #concatenate all coding sequences
+    gene_seq=unlist(strsplit(paste(genedb3$seq,collapse=""),split=""))
+    #create mutated sequence
+    mut_seq=gene_seq
+    hq_spec=hq.spectrum%>%
+      group_by(ancestral,mutant)%>%
+      summarize(nhets=sum(nhets))
+    syn_sites=sum(genedb3$syn.sites)
+    nsyn_sites=sum(genedb3$nsyn.sites)
+    
+  }
+  else{
+  db<-genedb3%>%
+    filter(gene==gn)
+  
+  hq_spec=hq.spectrum%>%
+    filter(gene==gn)
+  
+  total_mutations=sum(hq_spec$nhets)
+  
+  gene_seq<-unlist(strsplit(db$seq,split=""))
+  mut_seq=gene_seq
+  nsyn_sites=db$nsyn.sites
+  syn_sites=db$syn.sites
+  }
+  
+  for(i in 1:nrow(hq_spec)){
+    sites=which(gene_seq==tolower(hq_spec$ancestral[i]))
+    nmutations=hq_spec$nhets[i]
+    #randomly sample these many sites to mutate
+    mut_sites=sample(sites,nmutations)
+    mut_seq[mut_sites]=tolower(hq_spec$mutant[i])
+  }
+  
+  anc_codons<-seqinr::splitseq(gene_seq,0,3)
+  mut_codons<-seqinr::splitseq(mut_seq,0,3)
+  
+  #dissimilar codons
+  anc_mismatch=paste(anc_codons[which(anc_codons!=mut_codons)],collapse="")
+  mut_mismatch=paste(mut_codons[which(anc_codons!=mut_codons)],collapse="")
+  
+  
+  anc_aa<-unlist(strsplit(as.character(translate(DNAString(anc_mismatch),genetic.code = mt.code)),split=""))
+  mut_aa<-unlist(strsplit(as.character(translate(DNAString(mut_mismatch),genetic.code = mt.code)),split=""))
+  
+  nsyn=length(which(anc_aa!=mut_aa))
+  syn=total_mutations-nsyn
+  
+  #ka=-0.75*log(1- (4/3 * (nsyn/nsyn_sites)))
+  #ks=-0.75*log(1- (4/3 * (syn/syn_sites)))
+  hn=nsyn/nsyn_sites
+  hs=syn/syn_sites
+  hn_hs=hn/hs
+  return(hn_hs)
+  
+}
+
+#calculate neutral distribution for every gene and the whole rcrs coding sequence
+gene_list=c("rcrs",unique(genedb3$gene))
+dnds_bootmat=matrix(NA,nrow=1000,ncol=length(gene_list))
+for(j in 1:length(gene_list)){
+  dnds_bootmat[,j]<-replicate(1000,dnds.boot(gene_list[j]))
+  #print(gene_list[j])
+}
+
+colnames(dnds_bootmat)<-gene_list
+dnds_bootmat<-as_data_frame(dnds_bootmat)
+  
+mdnds_bootmat<-melt(dnds_bootmat,variable.name="Gene",value.name="dn_ds")
+
+#generate 95% confidence interval from bootstrap data
+#remove COX2 because it only has 2 heteroplasmies 
+mdnds_summary<-mdnds_bootmat%>%
+  filter(Gene!="COX2")%>%
+  group_by(Gene)%>%
+  summarize(median=median(dn_ds),
+            lower=quantile(dn_ds,probs=0.025),
+            upper=quantile(dn_ds,probs=0.975))
+
+#calculate number of heteroplasmies observed in each gene
+nhq_gene<-hq.spectrum%>%
+  filter(gene!="COX2")%>%
+  group_by(gene)%>%
+  summarize(nhets=sum(nhets))
+nhq_gene<-rbind(nhq_gene,
+                data.frame(gene="rcrs",nhets=sum(hq.spectrum$nhets)))
+
+plt_hnhs<-ggplot(mdnds_summary)+
+  geom_point(aes(Gene,median))+
+  geom_errorbar(aes(Gene,ymin=lower,ymax=upper))+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=90,
+                                 size=14),
+        axis.text.y=element_text(size=14),
+        axis.title=element_text(size=16),
+        text=element_text(size=14))+
+  labs(x="Gene",y="hN/hS")+
+  geom_point(data=mdmerged[which(mdmerged!="COX2"),],aes(gene,hn_hs),color="red")+
+  geom_text(data=nhq_gene,aes(x=gene,y=6,label=nhets),angle=90,size=5)+
+  geom_hline(yintercept = 1,linetype="dashed",color="red")
+
+plt_hnhs
+
+```
+
+What is the p-value for the hN/hS test across the whole mtDNA coding sequence?
+
+```{r dnds_p}
+
+mdnds_bootmat%>%
+  filter(Gene=="rcrs")%>%
+  summarize(pvalue=length(which(dn_ds<0.43))/length(dn_ds))
+
+#save the previous plot
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/mutation_spectrum/hnhs_distribution.pdf",plt_hnhs,height=5,width=5,useDingbats=F)
+
+```
+
+
+### Distribution of mtDNA mutations
+
+Plot the distribution of mutations along mtDNA. Each point is an independent mutation event, assuming heteroplasmies at a site in a family are the result of a single mutation. 
+
+```{r plt_mtdna}
+
+
+dhq.number<-hq%>%
+  distinct(fam_het_id,.keep_all = T)
+
+
+genedb<-genedb%>%
+  mutate(region=case_when(gene=="D-loop1"~"Dloop1",
+                          gene=="D-loop2"~"Dloop2",
+                          !gene%in%c("D-loop1","D-loop2")~"Dout"))
+
+mtdna.dat<-merge(dhq.number,genedb,by="gene",all.x=T)
+
+
+genedb<-genedb%>%
+  mutate(cols=case_when(class=="Dloop"~"#e41a1c",
+                        class=="CDS"~"#ff7f00",
+                        class=="tRNA"~"#4daf4a",
+                        class=="rRNA"~"#984ea3"))
+
+p1<-ggplot(mtdna.dat)+
+  geom_point(alpha=0.8,size=1.5,aes(position,FID,color=region))+
+  theme_bw()+
+  theme(axis.text.y=element_blank(),panel.grid.major.y = element_blank())+
+  scale_shape_manual(values=c(1,19))+
+  scale_color_manual(values=c("#984ea3","#e41a1c","#377eb8","#ff7f00"))+
+  labs(y="Families",x="rCRS coordinates",color="Region")
+
+p1
+```
+
+
+### References
