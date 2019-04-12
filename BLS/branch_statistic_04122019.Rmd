@@ -1,0 +1,1172 @@
+
+---
+title: "Branch Statistics analysis"
+author: "Arslan Zaidi"
+date: "3/15/2019"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_folding: show
+    theme: flatly
+bibliography: branch_statistic.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,cache=TRUE)
+```
+
+### Introduction
+
+Here I calculate branch length statistics (BLS) from heteroplasmy data. This method allows one to estimate the amount of drift in heteroplasmies occurring at various stages of development. For example, take a look at the following phylogeny:
+
+![Fig.1: Assumed phylogeny for a mother-2children family](BLS_phylogeny-01.png){width=300px,height=300px}
+
+The tree represents the hypothesized relationship among samples from the same family. The blood and cheek samples from each person are "bl" and "ch" respectively. With the BLS approach, we can break the phylogeny down into a number of branches (represented with different colors) and estimate the amount of drift experienced by heteroplasmies during these stages of development. This notebook shows how we did this.
+
+I will first calculate Fst (ratio of averages method) values for all pairwise comparisons in a family. Then use these to generate BLS. 
+
+First, load R libraries
+
+```{r pkgs}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(kableExtra)
+library(forcats)
+library(KScorrect)
+library(gridExtra)
+library(ape)
+```
+
+### Data wrangling and annotation of heteroplasmies
+
+
+Load heteroplasmy data and annotate heteroplasmies (e.g. which gene they are in, whether they are synonymous or non-synonymous, what is their pathogenecity score etc.). This will be useful for later when I need to compare BLS across different categories.
+
+```{r load_het_data_and_qc}
+#### load heteroplasmies - conservative (one mother and two children families only) #####
+hq.counts<-fread("~/Documents/mtproj_files/M2_new/files/Database/Heteroplasmy_tables/hq_counts_adj_frequency_09272018.txt",
+                 header=T)
+
+#add unique identifiers to table
+hq.counts<-hq.counts%>%
+  mutate(individual_het_id=paste(hq.counts$individual_id,hq.counts$position,sep="_"),
+         mother_het_id=paste(hq.counts$mother_id,hq.counts$position,sep="_"))
+
+#select specific columns to keep. We don't need all of them.
+hq<-hq.counts%>%
+  select(FID,fam_cat,fam_het_id,mother_id,mot_cat,mother_het_id,individual_id,individual_het_id,tissue_id,position,level,tissue,major,minor,adj.f,cvrg,age_collection,age_birth)
+
+##load annotations
+annot<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_syn_pathogenic_03222019.txt",header=T,sep="\t")
+
+#group genes by functional class
+annot<-annot%>%
+  mutate(region=case_when(gene%in%c("TRNH","TRNL1","TRNW","TRNS2","TRNT","TRNP","TRNV","TRNQ","TRNM","TRNC","TRNK","TRNR","TRNI","TRNN","TRNF","TRND")~"TRNA",
+                          gene%in%c("RNR1","RNR2")~"RNA",
+                          gene%in%c("D-loop1","D-loop2")~"D-loop",
+                          gene%in%c("ND3","ND4","ND5","ND6","CYTB","ND1","ND2","COX1","ATP8","ATP6","COX2","COX3")~"CDS",
+                          gene%in%c("")~""))
+
+#anotate heteroplasmies
+hq<-annot%>%
+  select(fam_het_id,region,gene,fold.d,syn,pathogenicity,ancestral.py,mutant.py)%>%
+  distinct()%>%
+  merge(hq,.,by="fam_het_id",all.x=T)
+
+```
+
+Wrangle the heteroplasmy data in a format that can be used to calculate Fst components automatically. Basically, I 'connect' each mother to her children and call this a family. Note that this way there may be multi-generational pedigrees thar are split into multiple families. This allows me to calculate branches for each family separately.
+
+While we are at it, I am also going to extract the age information and add this to the heteroplasmy data. This will allow me to calculate BLS for different age groups.
+
+```{r hq_wrangling}
+
+#divide data into two based on age at collection
+q.age_collection<-hq%>%
+  select(individual_id,age_collection)%>%
+  distinct()%>%
+  pull(age_collection)%>%
+  quantile(.,probs=c(0,0.5,1))/365
+
+#median age = 11.85
+
+#mothers
+hq.mothers<-hq%>%
+  filter(mot_cat!="")%>%
+  mutate(mother_group=individual_het_id,
+         age_birth_cat=NA,
+         age_collect_cat=cut(age_collection/365,breaks=q.age_collection,ordered_result=T,include.lowest=T))
+
+#their children
+hq.children<-hq%>%
+  filter(mother_id%in%hq.mothers$individual_id)
+
+#get age of mother at childbirth for these children
+q.age_birth<-hq.children%>%
+  select(mother_id,age_birth)%>%
+  distinct()%>%
+  pull(age_birth)%>%
+  quantile(.,probs=c(0,0.5,1))/365
+
+hq.children<-hq.children%>%
+  mutate(mother_group=mother_het_id,
+         age_birth_cat=cut(age_birth/365,breaks=q.age_birth,ordered_result=T,include.lowest=T),
+         age_collect_cat=cut(age_collection/365,q.age_collection,ordered_result=T,include.lowest=T))
+
+#rbind the two dataframes
+hq.concat<-rbind(hq.mothers,hq.children)
+
+#split hq data by mother_id
+shq<-split(hq.concat,f=hq.concat$mother_group)
+```
+
+### Calculate Fst and Dxy (divergence)
+
+Now I load functions that I wrote in a separate script to calculate Fst components, dxy (distance), and BLS. The scripts are able to generate different estimators of Fst (Hudson's, Reynold's, Weir-Cockerham etc.). I will use Hudson's throughout as it is a more robust estimator [@Bhatia2013].
+
+```{r load_functions}
+#load functions to calculate Fst and Branch statistics
+source("~/Documents/mtproj_files/M2_new/git/M2_git/Branch_stats/abs_functions_03152019.R")
+```
+
+$\Large \widehat{F}_{st}^{Hudson} = \frac{ (f_{1} − f_{2})^{2} − \frac{f_{1}\cdot (1−f_{1}) }{n_{1}−1} − \frac{f_{2}\cdot (1−f_{2})}{n_{2}−1}}{f_{1}\cdot(1−f{1}) + f_{2}\cdot(1−f_{2})}$
+
+Where $f_{1}$ and $f_{2}$ are the heteroplasmy frequencies in sample 1 and sample 2, and $n_{1}$ and $n{2}$ is the sequencing depth at the heterolasmy in sample 1 and sample 2.
+
+I calculated the numerator and denominator for all pairwise comparisons for each heteroplasmy separately. I will not calculate Fst right away as we used the "ratio of averages" method. This way I can calculate Fst across different sets of heteroplasmies (e.g. across all heteroplasmies in a specific age group).
+
+```{r cal_fst, cache=TRUE}
+#Calculate pairwise Fst components for each mother+positon combination. This is a unique identifier for a heteroplasmy segregating in a single family. 
+
+# this will return a list where each element is a dataframe
+#dataframe contains Fst components (numerator and denominator) for all pairwise comparisons in that family
+shq.fst<-lapply(shq,cal_fst)
+
+#convert to df and add mother_het_id as unique identifier
+shq.fst<- shq.fst%>%
+  bind_rows()
+
+
+#write data.frame to file for later use
+# fwrite(shq.fst,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/shq_fst_mot_hets_04092019.txt",sep="\t",col.names = T,row.names=F,quote=F)
+
+```
+
+### Calculate Fst, Dxy, and BLS
+
+
+Dxy (divergence) is calculated using:
+
+$D_{xy} = -2\cdot log(1-F_{st})$
+
+This gives us the amount of drift separating two samples in generations per effect population size (or drift units). Note that this equation is different from the way it is used in other papers (e.g. PBS[@Yi2010], and ABS[@Cheng2017]) by a factor of 2. While working on this paper, we realized that $-log(1-F_{st})$ estimates the amount of drift (measured as reduction in heterozgosity) experienced by a population relative to the ancestral population, not the total amount of drift between two populations. Therefore, the Fst between two populations is a measure of the reduction in heterozygosity relative to the ancestral population averaged over the two populations. To calculate the total drift between two populations, we multiplty by a factor of 2 under the assumption that both populations experienced similar levels of drift.   
+
+I used a non-parametric bootstrap approach to generate distributions around Fst and BLS. For each bootstrap, I sampled heteroplasmies with replacement. Then I summed the numerator and denominator across heteroplasmies and calculated the ratio of the two. This is the "ratio of averages" approach to estimating Fst. 
+
+Since the scripts calculate BLS for one mother-2children phylogeny, I needed to subsample 2 children from mothers who have >2 kids. This is done upstream of sampling heteroplasmies so different sets of kids from the same mother can be sampled for every bootstrap sample.
+
+The pairwise divergences can be used to estimate drift occurring at different parts of the phylogeny. The equations are: 
+
+$\large D_{bl,ch}^{mother} = D_{ab}$
+
+$\large D_{bl,ch}^{child1}= D_{cd}$ 
+
+$\large D_{bl,ch}^{child2}= D_{ef}$
+
+
+$\large D_{mother,child1} = \frac{max( D_{ac}+D_{bd}, D_{ad}+D_{bc}) − (D_{ab} + D_{cd})}{2}$
+
+
+$\large D_{mother,child2} = \frac{max( D_{ae}+D_{bf}, D_{af}+D_{be}) − (D_{ab} + D_{ef})}{2}$
+
+
+$\large D_{child1,child2} =  \frac{max( D_{ce}+D_{df}, D_{cf}+D_{de}) − (D_{cd} + D_{ef})}{2}$
+
+
+$\large D_{mother,children} = \frac{D_{mother,child1}+D_{mother,child2} − D_{child1,child2}}{2}$
+
+
+```{r bootstrap, cache=TRUE}
+
+#split shq.fst into a list for further analysis
+shq.fst<-split(shq.fst,f=shq.fst$mother_group)
+
+#remove cases with one mother and one child
+shq.fst<-shq.fst%>%
+  keep(function(x){x$mot_cat[1]%ni%c("t1g1","g1m1")})
+
+#function to resample mot_het_id (mother,position combination) with replacement
+boot.hets<-function(shq.list=shq.fst,sample_size=length(shq.list)){
+  list.len=length(shq.list)
+  sam.indices=sample(list.len,sample_size,replace=T)
+  return(shq.list[sam.indices])
+}
+
+#create empty list to populate results for each df
+bls.list=list()
+#pb<-txtProgressBar(min=0,max=100,style=3)
+for(i in 1:100){
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  shq.fst.tmp2<-lapply(shq.fst,sample2kids)
+  
+  #sample list w/t replacement
+  #don't filter on number of heteroplasmies in family
+  #at least 1 sample is heteroplasmic
+  shq.fst.tmp3<-boot.hets(shq.list=shq.fst.tmp2)
+  
+  #convert list output to data.frame
+  #shq.fst4<-bind_rows(unname(shq.fst3),.id="sno")
+  
+  bls.df<-cal_bls(shq.fst.tmp3,min.hets = 1,mot_cats="all")
+  bls.list[[i]]<-bls.df
+  #setTxtProgressBar(pb,i)
+}
+
+#convert list of dfs to a single df
+bls.df<-bind_rows(bls.list,.id="sno")
+
+colnames(bls.df)[2]<-"random"
+
+#melt to long format
+mbls.df<-bls.df%>%
+  select(-c(random,min.hets,nfams))%>%
+  melt(id.var="sno",value.name="length",variable.name="branch")
+  
+
+#calculate 95% confidence interval for each branch length
+mbls.df.ci<-mbls.df%>%
+  group_by(branch)%>%
+  summarize(mean=mean(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975))
+```
+
+Plot the BLS distributions. 
+
+```{r plt_bls}
+
+#filter out pairwise divergences for now. These can be examined separately if need be. 
+mbls.df2<-mbls.df%>%
+  filter(branch%in%c("m.tdiv","c1.tdiv","c2.tdiv","m1_c1",'m1_c2','c1_c2','m1_c'))%>%
+  mutate(branch.type=case_when(branch%in%c("m.tdiv","c1.tdiv","c2.tdiv")~"tdiv",
+                               branch%in%c('m1_c1')~'m1_c1',
+                               branch%in%c('m1_c2')~'m1_c2',
+                               branch%in%c('m1_c')~'m1_c',
+                               branch%in%c('c1_c2')~'c1_c2'))
+
+mbls.df2.ci<-mbls.df2%>%
+  group_by(branch.type)%>%
+  summarize(mean=mean(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975))%>%
+  mutate(lower=ifelse(lower<0,0,lower))
+
+mbls.df2$branch.type<-factor(mbls.df2$branch.type,
+                             levels=c("tdiv","m1_c1","m1_c2","c1_c2","m1_c"))
+
+mbls.df2.ci$branch.type<-factor(mbls.df2.ci$branch.type,
+                             levels=c("tdiv","m1_c1","m1_c2","c1_c2","m1_c"))
+                                              
+
+#plot!
+plt.bls=ggplot()+
+  geom_violin(data=mbls.df2,aes(branch.type,length,fill=branch.type),scale="width",trim=T,size=1)+
+  geom_point(data=mbls.df2.ci,aes(branch.type,mean),size=2)+
+  geom_errorbar(data=mbls.df2.ci,aes(branch.type,ymin=lower,ymax=upper),width=0.1,size=1)+
+  theme_bw()+
+  theme(legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_line(size=2),
+        panel.grid.minor.x=element_blank())+
+  scale_fill_manual(values=c("#fd8f24","#919c4c","#919c4c","#c03728","#f5c041"))+
+  scale_y_continuous(limits=c(0,max(mbls.df2$length)),breaks=seq(0,max(mbls.df2$length),0.2))+
+  labs(x="Branch name",y="Length in drift units (generation/Ne)")+
+  coord_flip()+
+  scale_x_discrete(limits=rev(levels(mbls.df2$branch.type)),
+                   labels=c("Mother-Child\ndivergence\n(pre-oocyte split)",
+                            "Child-child\ndivergence",
+                            "Mother-child2\ndivergence\n(overall)",
+                            "Mother-child1\ndivergence\n(overall)",
+                            "Blood-cheek\ndivergence"))
+
+
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_bls_phylogeny_ratio_a_avgs_04092019.pdf",
+#         plt.bls,
+#         height=6,
+#         width=8,
+#         useDingbats=F)
+
+# fwrite(mbls.df,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/bs_df_04092019.txt",
+#         sep="\t",
+#         col.names=T,
+#         row.names=F,
+#         quote=F)
+
+plt.bls
+
+```
+
+We can make a number of qualitative conclusions from the BLS results:
+
+1. The terminal branches (red) are much shorter compared to the internal branches (the rest). This indicates that drift between the tissues of an individual contributes very little to the overall drift in heteroplasmy frequencies. In other words heteroplasmy frequencies don't change much after the divergence of blood and cheek during gastrulation. This is rather surprising.
+
+2. The divergence between a mother and her older child is much higher than the divergence between a mother and her younger child. This likely represents the effect of age. Heteroplasmy frequencies change during meiotic arrest (as this is the only age-dependent stage). Likely there is mtDNA turnover inside the resting oocyte. 
+
+3. The divergence between two children is very high, and much greater than the divergence between a mother and either one of her children. This suggests that there is an independent bottleneck in the lineage of each oocyte. In other words, the germline bottleneck is not shared between two ooyctes from the same mother (which will become two children later). 
+
+4. It appears that the amount of drift during early development, before two oocyte lineages split from each other (orange branch) is quite low. This suggests that it is unlikely that the bottleneck (or a large portion of it) occurs during this time. This stage of development most likely correponds to very early embryonic development (cleavage). Some people have suggested that rapid mtDNA segregation during cleavage of the embryo without mtDNA replication could be the reason for the bottleneck. According to our results, this does not seem likely.
+
+BLS relies on the assumption that the heteroplasmies are polymorphic in the root of the phylogeny. In other words, we assume that if a site is heteroplasmic in one sample in the family, it must have been polymorphic at the root. To test whether BLS is sensitive to this assumption, we estimated BLS using different subsets of the data based on how many samples were heteroplasmic in the family. 
+
+We restricted this analysis only to phylogenies with a mother and 2 children only. 
+
+```{r bls_all,cache=TRUE}
+
+#calculate bls across heteroplasmies
+#filter on no. of samples in the family who are heteroplasmic
+#for now only do this for 1mother -2children phylogen
+blsdat1<-cal_bls(shq.fst,min.hets = 1,mot_cats = "m1c2")
+blsdat2<-cal_bls(shq.fst,min.hets = 2,mot_cats="m1c2")
+blsdat3<-cal_bls(shq.fst,min.hets = 3,mot_cats="m1c2")
+blsdat4<-cal_bls(shq.fst,min.hets = 4,mot_cats="m1c2")
+blsdat5<-cal_bls(shq.fst,min.hets = 5,mot_cats="m1c2")
+
+
+blsdat<-rbind(blsdat1,blsdat2,blsdat3,blsdat4,blsdat5)
+mblsdat<-melt(blsdat,id.var=c("sno","min.hets","nfams"))
+
+mblsdat%>%
+  filter(variable%in%c("m1_c1","m1_c2","m1_c","c1_c2","m.tdiv","c1.tdiv","c2.tdiv"))%>%
+ggplot(.,aes(min.hets,value))+
+  geom_bar(stat="identity")+
+  facet_wrap(~variable,scales="free")+
+  theme_bw()+
+  theme(panel.grid = element_blank())+
+  labs(x="Samples in a family with MAF>0.01",y="BLS")
+
+```
+
+Turns out, BLS estimates are pretty robust to this assumption.
+
+Let's output some statistics:
+
+```{r bls_stats}
+
+#median and 95% CI for each branch type
+print("Median and 95% CI for each branch type")
+
+mbls.df.ci
+
+print("Divergence between a mother and any of her children")
+
+mbls.df2%>%
+  filter(branch.type%in%c("m1_c1","m1_c2"))%>%
+  summarize(mean=mean(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975))
+
+print("Divergence between a mother and her older and younger children separately")
+
+mbls.df2%>%
+  filter(branch.type%in%c("m1_c1","m1_c2"))%>%
+  group_by(branch.type)%>%
+  summarize(mean=mean(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975)) 
+
+
+```
+
+Let's ask some other questions:
+
+Q: What fraction of the amount of drift in the germline can be attributed to drift occurring before the split of two oocyte lineages?
+
+```{r pre_v_post_oocyte}
+
+#calculate the median divergence b/w mother and child and the pre-oocyte divergence
+pre_post_df<-mbls.df2%>%
+  filter(branch.type%in%c("m1_c1","m1_c2","m1_c"))%>%
+  mutate(branch.group=case_when(branch.type%in%c("m1_c1","m1_c2")~"m1_child_overall",
+                                branch.type=="m1_c"~"m1_children_pre"))%>%
+  group_by(branch.group)%>%
+  dcast(sno~branch.group,value.var="length",fun.aggregate=mean)%>%
+  melt(id.var="sno")%>%
+  group_by(variable)%>%
+  summarize(median=median(value),
+            lower=quantile(value,probs=0.025),
+            upper=quantile(value,probs=0.975))%>%
+  mutate(lower=ifelse(lower<0,0,lower))
+  
+pre_post_df
+
+```
+
+We can calculate the % of heteroplasmy change due to drift pre-oocyte split:
+
+```{r pre_post_prop}
+
+pre_post_df[2,-1]/pre_post_df[1,-1]
+
+#ignore the negative numbers
+
+```
+
+
+Q. Is there more drift occurring in cheek vs blood tissue?
+
+To answer this, I will calculate the divergence b/w the blood tissues of two individuals and the divergence b/w the cheek tissues of two individuals and compare the two divergences. Because the internal branches should be the same in both cases, the only difference between the two divergences is the length of the external branches (i.e. cheek vs blood).
+
+```{r blvch}
+#isolate cases where the Fst is calculated for different individuals but the tissues are the same (e.g. m1_bl.c1_bl or m1_ch.c1_ch but not m1_bl.m1_ch or m1_bl.c1_ch)
+
+bl.ch.div<-bls.df[,c(1,grep(".._bl\\..._bl|.._ch\\..._ch",colnames(bls.df)))]
+
+bl.ch.div%>%
+  melt(id.var="sno",variable.name="pair",value.name="blength")%>%
+  mutate(tissue=case_when(pair%in%c("c1_bl.m1_bl",
+                                         "c2_bl.m1_bl",
+                                         "c1_bl.c2_bl")~"blood",
+                               pair%in%c("c1_ch.m1_ch",
+                                         "c2_ch.m1_ch",
+                                         "c1_ch.c2_ch")~"cheek"))%>%
+  group_by(tissue)%>%
+  summarize(median=median(blength),
+            lower=quantile(blength,probs=0.025),
+            upper=quantile(blength,probs=0.975))
+```
+
+The cheek divergence appears to be slightly higher than blood divergence but not by much.
+
+
+### mtDNA bottleneck size from BLS
+
+Now let's calculate various statistics and bottleneck size from BLS. The idea behind the latter this is simple: If heteroplasmies experience a lot of drift during germline development, the bottleneck size is likely small, and vice versa. We can use the approximation from Wilton et al. (2018) [@Wilton2018] to estimate the bottleneck size $N_{b}$:
+
+$N_{b}=2/d_{g}$
+
+where $d_{g}$ is the amount of drift between a mother and a child
+
+
+
+```{r bottleneck_stats}
+#both children combined
+mbls.df2%>%
+  filter(branch.type%in%c("m1_c1","m1_c2"))%>%
+  summarize(median=2/mean(length),
+            lower=2/quantile(length,probs=0.975),
+            upper=2/quantile(length,probs=0.025))
+  
+```
+
+The effective bottleneck size is ~7, which is very similar to previous estimates and to that from OPL.
+
+
+### Comparison with OPL results
+
+Let's these results with the OPL (Ontegenetic Phylogeny Likelihood) method [@Wilton2018].
+
+The OPL method uses a full likelihood model to estimate drift and mutation parameters on the phylogeny
+
+```{r opl, cache=TRUE}
+#load OPL results
+opl.est<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Peter_results/posterior_sample_1e5.txt",
+               header=T,
+               sep="\t")
+
+#add log-uniform prior for plotting
+opl.est<-opl.est%>%
+  mutate(prior=rlunif(100000,
+                      min=5e-04,max=1,
+                      base=exp(10)))
+
+#add P(drift=0)
+prob0<-data.frame(branch=factor(c("prior","bl","ch","fblo","fbuc","som","eoo_post","eoo_pre","loo"),
+                                levels=c("prior","bl","ch","fblo","fbuc","som","eoo_post","eoo_pre","loo")),
+                  prob=c(0.35826,1,1,0,0,0,0,0.2092,0))
+
+#melt dtaframe for plotting
+mopl.est<-opl.est%>%
+  melt(variable.name="branch",value.name="drift")
+
+#reorder branches for plotting
+mopl.est$branch<-factor(mopl.est$branch,
+                        levels=c("prior","bl","ch","fblo","fbuc","som","eoo_post","eoo_pre","loo"))
+
+#calculate 95% CI and mean
+mopl.est.ci<-mopl.est%>%
+  group_by(branch)%>%
+  summarize(median=median(drift),
+            lower=quantile(drift,probs=0.025),
+            upper=quantile(drift,probs=0.975))
+
+#plot OPL distributions
+plt.opl<-ggplot()+
+  geom_violin(data=mopl.est,aes(fct_rev(branch),
+                                drift,fill=branch),
+              trim=T,scale="width",
+              width=0.6,size=1)+
+  geom_point(data=mopl.est.ci,aes(fct_rev(branch),
+                                  median),
+             size=2)+
+  geom_errorbar(data=mopl.est.ci,aes(fct_rev(branch),
+                                     ymin=lower,
+                                     ymax=upper),
+                width=0.2,
+                size=1)+
+  coord_flip()+
+  scale_x_discrete(labels=rev(c("Prior",
+                                "Late somatic:\nblood",
+                            "Late somatic:\ncheek",
+                            "Early somatic:\nblood",
+                            "Early somatic:\ncheek",
+                            "Early somatic:\npre-gastrulation",
+                            "Early oogenesis:\npost-oocyte split",
+                            "Early oogenesis:\npre-oocyte split",
+                            "Late oogenesis:\ndictyate")))+
+  scale_y_log10(limits=c(NA,1),breaks=c(1e-4,1e-3,1e-2,1e-1,1e0))+
+  theme_bw()+
+  theme(legend.position="none",
+        axis.text.x = element_text(size=14),
+        axis.text.y=element_blank(),
+        axis.title.x = element_text(size=16),
+        axis.title.y=element_blank(),
+        panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_line(size=2),
+        panel.grid.minor.x=element_blank())+
+  scale_fill_manual(values=c("grey","#1f77b4","#ff7f0e","#2ca02c","#ff8080","#d62728","#9467bd"))+
+  labs(y="Genetic drift (generations/Ne)",x="Developmental stage")
+
+#plot P(drift=0) barplots
+plt.bar<-ggplot()+
+  geom_bar(data=prob0,aes(fct_rev(branch),prob,fill=branch),stat="identity",color="black",size=1)+
+  coord_flip()+
+  scale_x_discrete(labels=rev(c("Prior",
+                                "Late somatic:\nblood",
+                                "Late somatic:\ncheek",
+                                "Early somatic:\nblood",
+                                "Early somatic:\ncheek",
+                                "Early somatic:\npre-gastrulation",
+                                "Early oogenesis:\npost-oocyte split",
+                                "Early oogenesis:\npre-oocyte split",
+                                "Late oogenesis:\ndictyate")))+
+  scale_y_continuous(breaks=c(0,1))+
+  scale_fill_manual(values=c("grey","#1f77b4","#ff7f0e","#1f77b4","#ff7f0e","#2ca02c","#ff8080","#d62728","#9467bd"))+
+  theme_bw()+
+  theme(legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.x=element_blank())+
+  labs(y="Pr(no drift)",x="Developmental stage")
+
+plt.merged<-arrangeGrob(plt.bar,plt.opl,nrow=1,ncol=2,widths=c(2,3))
+
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_opl_phylogeny_04092019.pdf",plt.merged,height=6,width=8,useDingbats=F)
+
+plot(plt.merged)
+
+```
+
+The results from OPL are qualitatively very similar to the results from BLS. We can draw the same conclusions. However, they are nor directly comparable to each other because of various reasons. See main text for this.
+
+### Age effects using BLS
+
+#### Tissue divergence ~ age at collection
+
+Here I tested whether the divergence between the two tissues of an individual is related to age at collection. the hypothesis is that tissue divergence will be higher for older people and lower for younger people. The sample was divided into two groups (<30 and >30).
+
+```{r age_c, cache=TRUE}
+
+#bootstrap heteroplasmies and calculate tissue divergence for different age groups
+  
+#fst calculate across heteroplasmies in a bootstrapped samples using ratio of averages
+
+
+bls_age_c.list=list()
+#pb<-txtProgressBar(min=0,max=100,style=3)
+for(i in 1:100){
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  shq.fst.tmp2<-lapply(shq.fst,sample2kids)
+  
+  #sample heteroplasmies with replacement
+  shq.fst.tmp3<-boot.hets(shq.fst.tmp2)
+  
+  bls_age_c.list[[i]]<-cal_bls_age_c(shq.fst.tmp3)
+  #setTxtProgressBar(pb,i)
+}
+
+#convert list of dfs to a single df
+bls_age_c.df<-bind_rows(bls_age_c.list,.id="sno")
+
+
+#calculate median and 95% CI
+mbls_age_c_ci<-bls_age_c.df%>%
+  group_by(age_collection)%>%
+  summarize(median=median(length),
+            lower=quantile(length,0.025),
+            upper=quantile(length,0.975))
+
+mbls_age_c_ci
+```
+
+Plot tissue divergence by age of individual at collection.
+
+```{r plt_tis_age}
+
+plt.age_div<-ggplot()+
+  geom_violin(data=bls_age_c.df,aes(age_collection,length),scale="width",trim=T,size=1,fill="#fd8f24")+
+  geom_point(data=mbls_age_c_ci,aes(age_collection,median),size=2)+
+  geom_errorbar(data=mbls_age_c_ci,aes(age_collection,ymin=lower,ymax=upper),width=0.1,size=1)+
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size=2),
+        axis.text=element_text(size=14),
+        axis.title=element_text(size=16))+
+  labs(x="Age of individual at collection (years)",y="Divergence b/w blood and cheek")+
+  scale_x_discrete(labels=c("0-12","12-87"))
+
+# fwrite(bls_age_c.df,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/dat_bls_agec_bootstrap.txt",sep="\t",col.names=T,row.names=F,quote=F)
+
+#save plot to pdf
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_bls_tdiv_age_collection_040952019.pdf",plt.age_div,height=6,width=8,useDingbats=F)
+
+plt.age_div
+
+```
+
+Calculate the divergence b/w tissues per individual (no bootstrap, average across heteroplasmies for each individual)
+
+```{r age_c_ind}
+
+#calculate blood-tissue divergence between tissues with no bootstrap
+bls_agec_noboot<-cal_bls_age_c(shq.fst,bootstrap=FALSE)
+
+#summary stats
+bls_agec_noboot2<-bls_agec_noboot%>%
+  filter(is.na(length)==FALSE)
+lm.bls_agec<-lm(data=bls_agec_noboot2,length~age_collection)
+beta.bls_agec<-summary(lm.bls_agec)$coefficients[2]
+p.bls_agec<-summary(lm.bls_agec)$coefficients[8]
+bls_agec_noboot2$lm_pred<-predict(lm.bls_agec)
+
+plt.agec_noboot<-ggplot(data=bls_agec_noboot2,aes(age_collection,length))+
+  geom_point(size=2,color="#fd8f24",alpha=0.6)+
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size=2),
+        axis.text=element_text(size=14),
+        axis.title=element_text(size=16))+
+  labs(x="Age of individual at collection (years)",y="Divergence b/w blood and cheek")+
+  geom_line(aes(age_collection,lm_pred),color="blue")
+
+
+
+plt.agec_noboot
+
+```
+
+Older people don't tend to have more highly diverged tissue samples in terms of heteroplasmy frequency (95% CIs overlap). This is somewhat surprising because the time since the divergence between blood and cheek is probably the longest period in the phylogeny in absolute time.
+
+#### Mother-child divergence ~ age at birth
+
+Next, I tested whether the divergence between older mothers and their children is higher than the divergence between younger mothers and their kids. This would be expected if there was drift in heteroplasmy frequency during meiotic arrest. 
+
+```{r age_b, cache=TRUE}
+
+#######quartiles for mother's age at birth of child#################
+#[1] (25.1,29.7] [15.4,25.1] (29.7,33.5] (33.5,46.2]
+
+#assign each child a number 1,2 based onage quartile to which they belong
+shq.fst.tmp2<-lapply(shq.fst,function(fst.obj){
+  mot_cat=unique(fst.obj$mot_cat)
+  if(mot_cat%in%c("m1c2","m1c3","m1c4","m1c5")){
+    fst.obj.tmp<-fst.obj%>%
+      filter((ind1==ind2) | (ind1%in%c("c1","c2","c3","c4","c5")&ind2=="m1"))%>%
+        mutate(ind1=case_when(age.b1.cat=="[15.4,29.3]"~"c1",
+                              age.b1.cat=="(29.3,46.2]"~"c2",
+                              TRUE~"m1"),
+               ind2=case_when(age.b2.cat=="[15.4,29.3]"~"c1",
+                              age.b2.cat=="(29.3,46.2]"~"c2",
+                              TRUE~"m1"))%>%
+        mutate(pair=paste(ind1,"_",tis1,".",ind2,"_",tis2,sep=""))
+  }
+  if(mot_cat%in%c("g1m2","g1m1")){
+    fst.obj.tmp<-fst.obj%>%
+      filter((ind1==ind2) | (ind1==c("g1") & ind2%in%c("m1","m2")))%>%
+      mutate(ind1=case_when(age.b1.cat=="[15.4,29.3]"~"c1",
+                            age.b1.cat=="(29.3,46.2]"~"c2",
+                            TRUE~"m1"),
+             ind2=case_when(age.b1.cat=="[15.4,29.3]"~"c1",
+                            age.b1.cat=="(29.3,46.2]"~"c2",
+                            TRUE~"m1"))%>%
+      mutate(pair=paste(ind2,"_",tis2,".",ind1,"_",tis1,sep=""))
+  }
+  if(mot_cat%in%c("t1g1","t1g2")){
+    fst.obj.tmp<-fst.obj%>%
+      filter((ind1==ind2) | (ind1==c("g1") & ind2%in%c("m1","m2")))%>%
+      mutate(ind1=case_when(age.b1.cat=="[15.4,29.3]"~"c1",
+                            age.b1.cat=="(29.3,46.2]"~"c2",
+                            TRUE~"m1"),
+             ind2=case_when(age.b1.cat=="[15.4,29.3]"~"c1",
+                            age.b1.cat=="(29.3,46.2]"~"c2",
+                            TRUE~"m1"))%>%
+      mutate(pair=paste(ind1,"_",tis1,".",ind2,"_",tis2,sep=""))
+  }
+  return(fst.obj.tmp)
+})
+
+
+#bootstrap heteroplasmies and calculate mother-child divergence for different age groups
+#fst calculate across heteroplasmies in a bootstrapped samples using ratio of averages
+bls_age_b.list=list()
+#pb<-txtProgressBar(min=0,max=100,style=3)
+for(i in 1:100){
+  #sample list w/t replacement
+  shq.fst.tmp3<-boot.hets(shq.fst.tmp2)
+  
+  
+  bls_age_b.list[[i]]<-cal_bls_age_b1(shq.fst.tmp3)
+  #setTxtProgressBar(pb,i)
+}
+  
+#convert list of dfs to a single df
+bls_age_b.df<-bind_rows(bls_age_b.list,.id="sno")
+
+
+#calculate median and 95% CI
+mbls_age_b.df.ci<-bls_age_b.df%>%
+  group_by(m_c)%>%
+  summarize(median=median(length),lower=quantile(length,0.025),upper=quantile(length,0.975))
+
+mbls_age_b.df.ci
+
+```
+
+Plot mother-child divergence by age of mother at child birth
+
+
+```{r mc_age}
+plt.age_div<-ggplot()+
+  geom_violin(data=bls_age_b.df,aes(m_c,length),scale="width",trim=T,size=1,fill="#919c4c")+
+  geom_point(data=mbls_age_b.df.ci,aes(m_c,median),size=2)+
+  geom_errorbar(data=mbls_age_b.df.ci,aes(m_c,ymin=lower,ymax=upper),width=0.1,size=1)+
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size=2),
+        axis.text=element_text(size=14),
+        axis.title=element_text(size=16))+
+  labs(x="Age of mother at child birth (years)",y="Divergence b/w mother and child")+
+  scale_x_discrete(labels=c("15-30","30-46"))
+
+# fwrite(bls_age_b.df,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/dat_bls_ageb_bootstrap.txt",sep="\t",col.names=T,row.names=F,quote=F)
+# 
+# #save plot to pdf
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_bls_mcdiv_age_birth_04092019.pdf",plt.age_div,height=6,width=8,useDingbats=F)
+
+plt.age_div
+
+
+```
+
+This is an interesting result as it shows that the mother-child divergence is greater for older mothers than for younger mothers. This suggests that there is drift occurring in heteroplasmy frequency during meiotic arrest (as it is the only age-dependent stage in the germ line). 
+
+### Selection tests using BLS
+
+The branch statistic methods (LSBL [@Shriver2004], PBS [@Yi2010], and ABS [@Cheng2017]) were designed to test for selection. Let's use BLS to do the same with heteroplasmy data. The point is to divide heteroplasmies into categories based on their function or impact (synonymous/non-synonymous) and test whether some categories exhibit more drift than others. 
+
+Let's calculate BLS for synonymous and non-synonymous mutations first. Tabulate number of synonymous/non-synonymous heteroplasmies as well as coding/non-coding heteroplasmies
+
+```{r syn_tally, cache=TRUE}
+
+#tabulate how many heteroplasmies are synonymous vs non-synonymous and how many are non-coding
+syn.tally<-bind_rows(shq.fst)%>%
+  distinct(mother_group,syn)%>%
+  mutate(syn=ifelse(syn=="","non-cds",syn))%>%
+  group_by(syn)%>%
+  count()
+
+syn.tally
+```
+
+There are 77 synonymous heteroplasmies, 123 non-synonymous heteroplasmies and 158 non-coding heteroplasmies. When bootstrapping heteroplasmies, we will subsample 77 heteroplasmies from each group. Only 100 bootstraps carried out here to save time. The results in the paper are for 1000 bootstraps.
+
+```{r syn_permute}
+
+####calculate BLS for syn/nonsyn mutations
+#permutation test for synonymous-non-synonymous sites
+shq.fst.coding<-shq.fst%>%keep(function(x){x$syn[1]!=""})
+
+shq_fst_syn<-shq.fst%>%keep(function(x){x$syn[1]=="syn"})
+shq_fst_nsyn<-shq.fst%>%keep(function(x){x$syn[1]=="nsyn"})
+
+#create empty list to populate results for each df
+bls_syn.perm.list=list()
+bls_nsyn.perm.list=list()
+#generate random vector of syn/nsyn annotation based on tally
+#there are 200 coding heteroplasmies
+#sample 123 non-synonymous heteroplasmies
+#pb<-txtProgressBar(min=0,max=100,style=3)
+for(i in 1:100){
+  
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  shq_fst_syn1<-lapply(shq_fst_syn,sample2kids)
+  shq_fst_nsyn1<-lapply(shq_fst_nsyn,sample2kids)
+  
+  #subsample non-synonymous heteroplasmies
+  #to match synonymous heteroplasmies
+  shq_fst_nsyn1.1<-sample(shq_fst_nsyn1,77,replace=F)
+  
+  shq_fst_coding1<-c(shq_fst_nsyn1.1,shq_fst_syn1)
+  
+  #totaling 154 heteroplasmies
+  #artificially create 77 synonymous heteroplasmies
+  #and 77 non-synonymous heteroplasmies
+  nsyn_ix=sample(154,77,replace=F)
+  syn_ix=setdiff(seq(1,154),nsyn_ix)
+  shq_fst_syn2<-shq_fst_coding1[syn_ix]
+  shq_fst_nsyn2<-shq_fst_coding1[nsyn_ix]
+  
+  #change synonymous labels
+  shq_fst_syn2<-lapply(shq_fst_syn2,function(x){
+    x$syn<-"syn"
+    return(x)
+  })
+  shq_fst_nsyn2<-lapply(shq_fst_nsyn2,function(x){
+    x$syn<-"nsyn"
+    return(x)
+  })
+  
+  bls_syn.perm.list[[i]]<-cal_bls_syn(shq_fst_syn2)
+  bls_nsyn.perm.list[[i]]<-cal_bls_syn(shq_fst_nsyn2)
+  #setTxtProgressBar(pb,i)
+  
+}
+
+bls_syn.perm.df<-bind_rows(bls_syn.perm.list,.id="sno")
+bls_nsyn.perm.df<-bind_rows(bls_nsyn.perm.list,.id="sno")
+bls_synall.perm.df<-rbind(bls_syn.perm.df,bls_nsyn.perm.df)  
+
+mbls.syn.perm.df.ci<-bls_synall.perm.df%>%
+  group_by(syn,branch.type)%>%
+  summarize(median=median(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975))%>%
+  mutate(lower=ifelse(lower<0,0,lower))
+
+bls_syn.perm.merged<-merge(bls_syn.perm.df,bls_nsyn.perm.df,by=c("sno","branch","branch.type"))
+bls_syn.perm.merged<-bls_syn.perm.merged%>%
+  mutate(diff=length.x-length.y)%>%
+  group_by(sno,branch.type)%>%
+  summarize(diff=mean(diff))
+
+mbls.syn_diff.perm.ci<-bls_syn.perm.merged%>%
+  group_by(branch.type)%>%
+  summarize(median=median(diff),
+            lower=quantile(diff,probs=0.025),
+            upper=quantile(diff,probs=0.975))
+
+#calculate observed values of difference in branch length between syn and nsyn
+shq_fst_syn.obs<-lapply(shq_fst_syn,sample2kids)
+shq_fst_nsyn.obs<-lapply(shq_fst_nsyn,sample2kids)
+
+bls_syn.obs<-cal_bls_syn(shq_fst_syn.obs)
+bls_nsyn.obs<-cal_bls_syn(shq_fst_nsyn.obs)
+
+bls_syn.obs<-bls_syn.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_nsyn.obs<-bls_nsyn.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_syn.obs.merged<-merge(bls_syn.obs,bls_nsyn.obs,by=c("branch.type"))
+bls_syn.obs.merged<-bls_syn.obs.merged%>%
+  mutate(diff=length.x-length.y)
+
+#calculate p-values
+bls_syn.obs.merged$pvalue<-NA
+for(i in 1:5){
+  branch.name=bls_syn.obs.merged$branch.type[i]
+  #observed value
+  obs.diff<-bls_syn.obs.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  permdiff<-bls_syn.perm.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  bls_syn.obs.merged$pvalue[i]<-length(which(permdiff>obs.diff))/length(permdiff)
+}
+
+bls_syn.obs.merged<-bls_syn.obs.merged%>%
+  mutate(direction=case_when(diff<0~"down",
+                             diff>0~"up"))
+
+```
+
+```{r plt_synpermute}
+
+#plot syn-nsyn difference
+plt_bls_syndiff.perm<-ggplot(bls_syn.perm.merged)+
+  geom_violin(scale="width",
+              trim=T,
+              aes(branch.type,
+                  diff,
+                  fill=branch.type))+
+  geom_point(data=mbls.syn_diff.perm.ci,
+             aes(branch.type,median),
+             size=2)+
+  geom_errorbar(data=mbls.syn_diff.perm.ci,
+                aes(branch.type,ymin=lower,ymax=upper),
+                width=0.1,
+                size=0.5)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90),
+        legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.x=element_blank())+
+  labs(x="Branch type",y="Difference in branch length\n
+       (synonymous - non-synonymous)")+
+  geom_point(data=bls_syn.obs.merged,aes(x=branch.type,
+                                         y=diff,
+                                         shape=direction),
+             color="black",
+             fill="white",
+             stroke=0.5,
+             size=2)+
+  scale_fill_manual(values=c("#fd8f24","#919c4c","#919c4c","#c03728","#f5c041"))+
+    scale_x_discrete(labels=c("Blood-cheek",
+                              "Mother-child1\n(overall)",
+                              "Mother-child2\n(overall)",
+                              "Child-child",
+                              "Mother-Child\n(pre-oocyte split)"))+
+  geom_text(data=bls_syn.obs.merged,aes(x=branch.type,
+                                        y=0.9,
+                                        label=format(round(pvalue,
+                                                           digits=3),
+                                                     nsmall=3)),
+            size=14/2.8,
+            angle=90)+
+  scale_shape_manual(values=c(25,24))+
+  ylim(c(-1,1.01))
+
+# fwrite(bls_syn.perm.merged,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/dat_bls_synperm_04092018.txt",sep="\t",col.names=F,quote=F)
+# 
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_bls_synperm_04092019.pdf",
+#        plt_bls_syndiff.perm,
+#        height=7,
+#        width=6,
+#        useDingbats=F)
+
+plt_bls_syndiff.perm
+```
+
+The plot shows that the branches for synonymous heteroplasmies are longer than the branches for non-synonymous heteroplasmies, particularly in the germline. This suggests that synonymous heteroplasmies experience more drift relative to non-synonymous heteroplasmies, likely because negative selection prevents non-synoymous heteroplasmies from drifting to very high frequencies.
+
+
+Now let's calculate BLS for pathogenic/non-pathogenic mutations. Tally number of pathogenic and non-pathogenic heteroplasmies. 
+
+```{r pat_tally}
+
+#tabulate how many heteroplasmies are synonymous vs non-synonymous and how many are non-coding
+pat.tally<-bind_rows(shq.fst)%>%
+  distinct(mother_group,pathogenicity)%>%
+  group_by(pathogenicity)%>%
+  count()
+
+pat.tally
+
+
+```
+
+There are 34 pathogenic heteroplasmies and 321 neutal heteroplasmies. Bootstrap and generate BLS distribution for each. 
+
+```{r pat_npat_perm}
+
+shq_fst_pat<-shq.fst%>%keep(function(x){x$pathogenicity[1]=="P"})
+shq_fst_npat<-shq.fst%>%keep(function(x){x$pathogenicity[1]=="N"})
+
+#create empty list to populate results for each df
+bls_pat.perm.list=list()
+bls_npat.perm.list=list()
+
+#pb<-txtProgressBar(min=0,max=100,style=3)
+for(i in 1:100){
+  
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  shq_fst_pat1<-lapply(shq_fst_pat,sample2kids)
+  shq_fst_npat1<-lapply(shq_fst_npat,sample2kids)
+  
+  #subsample non-pathogenic heteroplasmies
+  #to match number of pathogenic heteroplasmies
+  shq_fst_npat1.1<-sample(shq_fst_npat1,34,replace=F)
+  
+  shq_fst_pat2<-c(shq_fst_npat1.1,shq_fst_pat1)
+  
+  #totaling 62 heteroplasmies
+  #artificially create 31 pathogenic heteroplasmies
+  #and 31 non-pathogenic heteroplasmies
+  #by shuffling labels
+  npat_ix=sample(68,34,replace=F)
+  pat_ix=setdiff(seq(1,68),npat_ix)
+  shq_fst_pat3<-shq_fst_pat2[pat_ix]
+  shq_fst_npat3<-shq_fst_pat2[npat_ix]
+  
+  #change pathogenicity labels
+  shq_fst_pat3<-lapply(shq_fst_pat3,function(x){
+    x$pathogenicity<-"P"
+    return(x)
+  })
+  shq_fst_npat3<-lapply(shq_fst_npat3,function(x){
+    x$pathogenicity<-"N"
+    return(x)
+  })
+  
+  bls_pat.perm.list[[i]]<-cal_bls_pat(shq_fst_pat3)
+  bls_npat.perm.list[[i]]<-cal_bls_pat(shq_fst_npat3)
+  #setTxtProgressBar(pb,i)
+  
+}
+
+bls_pat.perm.df<-bind_rows(bls_pat.perm.list,.id="sno")
+bls_npat.perm.df<-bind_rows(bls_npat.perm.list,.id="sno")
+
+
+bls_pat.perm.merged<-merge(bls_npat.perm.df,bls_pat.perm.df,by=c("sno","branch","branch.type"))
+bls_pat.perm.merged<-bls_pat.perm.merged%>%
+  mutate(diff=length.x-length.y)%>%
+  group_by(sno,branch.type)%>%
+  summarize(diff=mean(diff))
+
+mbls.pat_diff.perm.ci<-bls_pat.perm.merged%>%
+  group_by(branch.type)%>%
+  summarize(median=median(diff),
+            lower=quantile(diff,probs=0.025),
+            upper=quantile(diff,probs=0.975))
+
+#calculate observed values of difference in branch length between pathogenic and non-pathogenic
+shq_fst_pat.obs<-lapply(shq_fst_pat,sample2kids)
+shq_fst_npat.obs<-lapply(shq_fst_npat,sample2kids)
+
+bls_pat.obs<-cal_bls_pat(shq_fst_pat.obs)
+bls_npat.obs<-cal_bls_pat(shq_fst_npat.obs)
+
+bls_pat.obs<-bls_pat.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_npat.obs<-bls_npat.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_pat.obs.merged<-merge(bls_npat.obs,bls_pat.obs,by=c("branch.type"))
+bls_pat.obs.merged<-bls_pat.obs.merged%>%
+  mutate(diff=length.x-length.y)
+
+#calculate p-values
+bls_pat.obs.merged$pvalue<-NA
+for(i in 1:5){
+  branch.name=bls_pat.obs.merged$branch.type[i]
+  #observed value
+  obs.diff<-bls_pat.obs.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  permdiff<-bls_pat.perm.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  bls_pat.obs.merged$pvalue[i]<-length(which(permdiff>obs.diff))/length(permdiff)
+}
+
+bls_pat.obs.merged<-bls_pat.obs.merged%>%
+  mutate(direction=case_when(diff<0~"down",
+                             diff>0~"up"))
+
+
+
+```
+
+
+```{r plt_patperm}
+
+#plot
+plt_bls_patdiff.perm<-ggplot(bls_pat.perm.merged)+
+  geom_violin(scale="width",
+              trim=T,
+              aes(branch.type,diff,fill=branch.type))+
+  geom_point(data=mbls.pat_diff.perm.ci,
+             aes(branch.type,median),
+             size=2)+
+  geom_errorbar(data=mbls.pat_diff.perm.ci,
+                aes(branch.type,ymin=lower,ymax=upper),
+                width=0.1,
+                size=0.5)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90),
+        legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.x=element_blank())+
+  labs(x="Branch type",y="Difference in branch length\n
+       (non-pathogenic - pathogenic)")+
+  geom_point(data=bls_pat.obs.merged,aes(branch.type,
+                                         diff,
+                                         shape=direction),
+             color="black",
+             fill="white",
+             stroke=0.5,
+             size=2)+
+  scale_fill_manual(values=c("#fd8f24","#919c4c","#919c4c","#c03728","#f5c041"))+
+  scale_x_discrete(labels=c("Blood-cheek",
+                            "Mother-child1\n(overall)",
+                            "Mother-child2\n(overall)",
+                            "Child-child",
+                            "Mother-Child\n(pre-oocyte split)"))+
+  geom_text(data=bls_pat.obs.merged,aes(
+    x=branch.type,
+    y=max(bls_pat.perm.merged$diff)+0.25,
+    label=format(round(pvalue,
+                       digits=3),
+                 nsmall=3)),
+    size=14/2.8,
+    angle=90)+
+  scale_shape_manual(values=c(25,24))
+
+
+
+
+# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/plt_bls_patperm_04092019.pdf",
+#        plt_bls_patdiff.perm,
+#        height=7,
+#        width=6,
+#        useDingbats=F)
+
+# fwrite(bls_pat.perm.merged,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/dat_blspat_perm_04092019.txt",sep="\t",col.names=T,row.names=F,quote=F)
+
+
+plt_bls_patdiff.perm
+```
+
+Even though we see a similar pattern here, i.e., non-pathogenic heteroplasmies experience more drift relative to pathogenic heteroplasmies, the difference is not as significant. This might be because pathogenic heteroplasmies are already present at very low frequencies, potentially below a threshold at which selection might operate.
+
+
+### References
