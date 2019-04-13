@@ -1,26 +1,39 @@
 ---
-title: "Analysis of heuristically identified germline de novo mutations"
+title: |
+    |  Analysis of heuristically identified 
+    | germline de novo mutations
+
 author: "Arslan Zaidi"
 date: "4/12/2019"
 output:
-  html_document:
-    toc: true
-    toc_float:
-      collapsed: false
-      smooth_scroll: true
-    code_folding: show
-    theme: flatly
+  pdf_document:
+    pandoc_args: "--wrap=auto"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
+### Introduction
+
 Here, we heuristically identified putative de novo mutations that may have arisen in the germline and tested whether they increase with age of the mother.
 
 First, load the nucleotide counts for all identified heteroplasmies from all family members.
 
-```{r load_libs}
+```{r eval=F}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+
+#read conservative table of heteroplasmies and their counts in all family members
+allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
+              Fixing_heteroplasmy_table/
+              hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
+
+
+```
+
+```{r results='asis', echo=F}
 library(data.table)
 library(dplyr)
 library(ggplot2)
@@ -31,10 +44,11 @@ allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasm
 
 ```
 
+### Heteroplasmies shared by both tissues are more likely to be germline
+
 To find putative de novo germline mutations, we we first identify samples who are heteroplasmic for both tissues but no one in their family shares that heteroplasmy. 
 
 To do this, we first tabulate the number of samples that are heteroplasmic in the family. Then, select families where this number is 2.
-
 
 
 ```{r tab}
@@ -77,6 +91,7 @@ allfam.denovo<-allfam%>%
   mutate(individual_het_id=paste(individual_id,position,sep="_"))
 ```
 
+### Heteroplasmies shared by other family members less likely to be *de novo*
 
 Count number of individuals in each family who are not the "proband" and have heteroplasmy at that site less than 0.2%. This is to reduce the probability of false-positives.
 
@@ -85,9 +100,15 @@ Count number of individuals in each family who are not the "proband" and have he
 
 hq.denovo.red<-allfam.denovo%>%
   group_by(FID,position)%>%
-  summarize(nhets.2p=length(setdiff(which(maf>0.002),which(individual_het_id%in%hq.denovo$individual_het_id))))%>%
+  summarize(
+    nhets.2p = length(
+      setdiff(which(maf>0.002),
+              which(individual_het_id%in%hq.denovo$individual_het_id)
+              )))%>%
   mutate(fam_het_id=paste(FID,position,sep="_"))%>%
   filter(nhets.2p==0)
+                              
+                                            
 
 #78 cases
 
@@ -101,7 +122,9 @@ hq.ind.denovo<-allfam.denovo.red%>%
   filter(maf>0.01)%>%
   select(FID,mother_id,individual_id,level,tissue,position,maf)
 
-# fwrite(hq.ind.denovo,"files/Analysis/Denovo_mutations/hq_denovo_mutations_03202019.txt",sep="\t",col.names=T,row.names=F,quote=F)
+# fwrite(hq.ind.denovo,"files/Analysis/Denovo_mutations/
+#hq_denovo_mutations_03202019.txt",
+#sep="\t",col.names=T,row.names=F,quote=F)
 
 
 ```
@@ -124,23 +147,36 @@ hq.ndenovo.per.ind<-allfam.denovo.red%>%
 
 Now add 0s - the kids who don't have any denovo mutations - for the regression.
 
-```{r}
+```{r,eval=F}
+
+#for this, read in the whole famfile 
+famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
+               Fixing_heteroplasmy_table/
+               famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+```
+
+```{r,results='asis',echo=F}
 
 #for this readin the whole famfile 
 famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+```
+
+```{r}
 
 #"not in" function
 "%ni%"<-Negate("%in%")
 
-allfam.nodenovo<-famfile[which((famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
-                   famfile$fam_cat%in%c("g1m2","g1m1c2","g1m1c2m2c0","g1m1c3") & 
-                   famfile$level%in%c("m1","m2","c1","c2","c3"))|
-                     (famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
-                        famfile$fam_cat%in%c("tg1m1c3","tg1m1c1c2g2") & 
-                        famfile$level%in%c("g1","g2","m1","c1","c2","c3"))|
-                     (famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
-                        famfile$fam_cat%in%c("m1c2","m1c3","m1c4","m1c5") & 
-                        famfile$level%in%c("c1","c2","c3","c4","c5"))),]
+allfam.nodenovo<-famfile[
+  which(
+    (famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
+       famfile$fam_cat%in%c("g1m2","g1m1c2","g1m1c2m2c0","g1m1c3") &
+       famfile$level%in%c("m1","m2","c1","c2","c3")) |
+      (famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
+         famfile$fam_cat%in%c("tg1m1c3","tg1m1c1c2g2") &
+         famfile$level%in%c("g1","g2","m1","c1","c2","c3")) |
+      (famfile$individual_id%ni%hq.ndenovo.per.ind$individual_id &
+         famfile$fam_cat%in%c("m1c2","m1c3","m1c4","m1c5") & 
+         famfile$level%in%c("c1","c2","c3","c4","c5"))),]
 
 
 nodenovo.per.ind<-allfam.nodenovo%>%
@@ -156,6 +192,7 @@ hq.ndenovo.per.ind<-hq.ndenovo.per.ind[order(hq.ndenovo.per.ind$individual_id),]
 
 ```
 
+### Number of putative *de novo* heteroplasmies ~ age of mother 
 
 Carry out Poisson regression of the number of heuristically identified de novo heteroplasmies on the age of the mother at child birth. This will tell us if older mothers pass on more germline mutations than younger mothers.
 
@@ -173,10 +210,11 @@ pval=round(summary(hq.age.b)$coeff[2,4],3)
 #plot this
 #plot relationship between nhets and age at birth
 plt.nhets.ageb<-ggplot(hq.ndenovo.per.ind,aes(age.b,nhets))+
-  geom_point()+
+  geom_point(alpha=0.5,position=position_jitter(height=0.02,width=NULL))+
   geom_line(data=pred.age.b,aes(x=age.b,pred.nhets),color="red")+
   theme_bw()+
-  labs(x="Age of mother at child birth",y="No. of putative germline de novo heteroplasmies in child")+
+  labs(x="Age of mother at child birth",
+       y="No. of putative germline de novo heteroplasmies in child")+
   annotate(geom="text",x=25,y=2.5,
            label=paste("Beta= ",beta,"\np-value= ",pval,sep=""),size=5)
 
@@ -186,6 +224,6 @@ plt.nhets.ageb
 
 So, even though the number of putative de novo germline mutations increases with the age of the individual at collection, this relationship is not statistically significant at the 0.05 level.
 
-$$N_{0-40} = exp( \beta_{intercept} ).exp( \beta_{age}.80 ) = exp( -1.978 ).exp( 0.0276 . 40)$$
+$$N_{0-40} = exp( \beta_{intercept} ).exp( \beta_{age}.80 ) = exp( -1.978 ).exp( 0.0276 \times 40)$$
 
 This amounts to ~0.42 new mutations arising in the germline between the ages of 0 and 40, which is not a large number.
