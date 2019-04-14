@@ -1,15 +1,12 @@
 ---
-title: "Analysis of heuristically identified somatic *de novo* mutations"
+title: |
+    | Analysis of heuristically identified 
+    | somatic *de novo* mutations"
 author: "Arslan Zaidi"
 date: "4/12/2019"
 output:
-  html_document:
-    toc: true
-    toc_float:
-      collapsed: false
-      smooth_scroll: true
-    code_folding: show
-    theme: flatly
+  pdf_document:
+    pandoc_args: "--wrap=auto"
 ---
 
 ```{r setup, include=FALSE}
@@ -30,13 +27,22 @@ Here, I heuristically identified putative *de novo* mutations that may have aris
 First, load the nucleotide counts for all identified heteroplasmies from all family members.
 
 
-```{r}
+```{r, eval=F}
+
+#read conservative table of heteroplasmies and their counts in all family members
+allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
+              Fixing_heteroplasmy_table/
+              hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
+```
+
+```{r, results='asis', echo=F}
 
 #read conservative table of heteroplasmies and their counts in all family members
 allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
+
 ```
 
-TO find potential de novo somatic mutations, we first identify sites which are heteroplasmic in only sample of the entire family. 
+To find potential de novo somatic mutations, we first identify sites which are heteroplasmic in only sample of the entire family. 
 
 Tabulate number of samples that are heteroplasmic in the family
 
@@ -119,11 +125,26 @@ hq.ndenovo.per.ind.ch<-hq.ndenovo.per.ind%>%
 
 Add 0s for remaining individuals - who don't carry any *de novo* heteroplasmies. These will be included in the regression.
 
-```{r}
+```{r, eval=F}
+
+#add individuals with no mutations whatsoever - which are also not present in the family
+#load complete family file
+famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
+               Fixing_heteroplasmy_table/
+               famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+
+```
+
+```{r, results='asis',echo=F}
 
 #add individuals with no mutations whatsoever - which are also not present in the family
 #load complete family file
 famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+
+```
+
+
+```{r}
 
 "%ni%"<-Negate("%in%")
 
