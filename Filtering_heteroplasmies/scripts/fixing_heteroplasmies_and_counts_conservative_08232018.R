@@ -1,17 +1,17 @@
 library(data.table)
 library(dplyr)
-library(plyr)
 library(ggplot2)
+library(here)
 
 #setwd("/Users/Azaidi/Documents/M2_new/files/Analysis/Fixing_heteroplasmy_table")
 
 #load fam file
-fam<-fread("../../../files/Database/Active_fam_file/famfile_09272018.txt",header=T,sep="\t")
+fam<-fread(here("Data_files/famfile_09272018.txt"),header=T,sep="\t")
 #fam<-fam[-which(fam$FID==c("Zclonal")),]
 fam<-fam[-which(fam$run%in%c("TR13n","TR29n","TR13","TR29")),]
 
 #load heteroplasmy table
-hets<-fread("../../../files/Analysis/variant_calling/trim.rd.hets/Allruns_2_33_08222018.header.trim.rd.hets",header=T,sep="\t")
+hets<-fread(here("Data_files/Allruns_2_33_08222018.header.trim.rd.hets"),header=T,sep="\t")
 
 #starting number of heteroplasmies: 1473
 
@@ -38,10 +38,10 @@ unique(fam$FID)[-which(unique(fam$FID)%in%unique(hets2$FID))]
 #remove duplicated samples
 
 #load duplicates pre-TR33
-dups<-fread("../../../files/Analysis/qc/Cleaning_duplicates/March_April_2k18/duplicates_removed_08092018.txt",header=F)
+dups<-fread(here("Data_files/duplicates_removed_08092018.txt"),header=F)
 
 #load duplicates sequenced in TR33
-dups.33<-fread('../../../files/Analysis/Fixing_heteroplasmy_table/TR33_duplicates.txt')
+dups.33<-fread(here("Data_files/TR33_duplicates.txt"))
 
 #remove duplicated sequences from heteroplasmy file
 hets3<-hets2[-which(hets2$fqid%in%dups$V1),]
@@ -57,7 +57,10 @@ hets3<-hets3[-which(hets3$fqid%in%dups.33$fqid_old),]
 fam2<-fam[-which(fam$fqid%in%dups$V1|fam$fqid%in%dups.33$fqid_old),]
 
 # check how many tissues sequenced per person
-dfam.2t<-ddply(fam2,.(individual_id),summarize,ntissue=length(which(duplicated(tissue_id)=="FALSE")))
+dfam.2t<-fam2%>%
+  group_by(individual_id)%>%
+  summarize(ntissue=length(unique(tissue_id)))
+
 # > dfam.2t[which(dfam.2t$ntissue<2),]
 # individual_id ntissue
 # 70         F171g1       1
@@ -92,7 +95,10 @@ fam3<-fam2[-which(fam2$individual_id%in%c("F171g1",
 
 
 #how many mothers have 2 children
-dfam.2c<-ddply(fam3,.(mother_id,fam_str),summarize,nchildren=length(which(duplicated(individual_id)=="FALSE")))
+dfam.2c<-fam3%>%
+  group_by(mother_id,fam_str)%>%
+  summarize(nchildren=length(unique(individual_id)))
+#dfam.2c<-ddply(fam3,.(mother_id,fam_str),summarize,nchildren=length(which(duplicated(individual_id)=="FALSE")))
 
 #dfam.2c[which(dfam.2c$nchildren<2),]
 #mothers with less than two children
@@ -136,8 +142,7 @@ fam4$fam_str[which(fam4$FID=="F239")]<-"0-0-1-2"
 #F308 initially had three children. Since we removed the 2nd child, we have to relabel the 3rd child as c2 under "levels" column
 fam4$level[which(fam4$individual_id=="F308m1c3")]<-"c2"
 
-write.table(fam4,"../../../files/Analysis/Fixing_heteroplasmy_table/famfile_cleared_conservative_09272018.txt",sep="\t",col.names=T,row.names=F,quote=F)
-
+write.table(fam4,here("Data_files/famfile_cleared_conservative_09272018.txt"),sep="\t",col.names=T,row.names=F,quote=F)
 
 #create fq_het_id in hets file
 hets5$fq_het_id<-paste(hets5$fqid,hets5$position,sep="_")
@@ -148,7 +153,7 @@ hets5$fam_het_id<-paste(hets5$FID,hets5$position,sep="_")
 
 
 #### load count file for all family frequencies ####
-counts<-fread("../../../files/Analysis/variant_calling/trim.rd.counts/Allruns_08222018.trim.rd.counts",header=F)
+counts<-fread("https://www.dropbox.com/s/gyk54cgek4kooo4/Allruns_08222018.trim.rd.counts?dl=1",header=F,sep="\t")
 colnames(counts)<-c('fqid','ref','position','A','C','G','T','a','c','g','t','cvrg','nalleles','major','minor','maf')
 
 #merge with fam file
@@ -192,7 +197,11 @@ counts3$heteroplasmy[which(is.na(counts3$heteroplasmy)==TRUE)]<-"no"
 counts3$tissue_het_id<-paste(counts3$tissue_id,counts3$position,sep="_")
 
 #tabulate for each heteroplasmy how many times in the family it was discovered as a heteroplasmy and how many times it had MAF>0.01
-dcounts3<-ddply(counts3,.(position),summarize,nmaf=length(which(maf>=0.01)),nhets=length(which(heteroplasmy=="yes")))
+dcounts3<-counts3%>%
+  group_by(position)%>%
+  summarize(nmaf=length(which(maf>=0.01)),
+            nhets=length(which(heteroplasmy=="yes")))
+#dcounts3<-ddply(counts3,.(position),summarize,nmaf=length(which(maf>=0.01)),nhets=length(which(heteroplasmy=="yes")))
 
 #add column listing the difference between these two numbers - this could highlight 'problematic' sites
 dcounts3$diff<-with(dcounts3,nmaf-nhets)
@@ -204,11 +213,16 @@ dcounts3<-dcounts3[order(-dcounts3$diff),]
 # 2. Sites whcih show a large difference between nhets and nmaf also tend to be previously known problematic sites (e.g. 185, 316, 204, 4233)
 
 #tabulate number of families heteroplasic for the same site - to identify other problematic sites
-dcounts.shared<-ddply(counts3,.(position),function(x){
-  nfams.hets=length(unique(x$FID[which(x$heteroplasmy=="yes")]))
-  nfams.maf=length(unique(x$FID[which(x$maf>=0.01)]))
-  return(data.frame(nfams.maf,nfams.hets))
-})
+dcounts.shared<-counts3%>%
+  group_by(position)%>%
+  summarize(nfams.hets=length(unique(FID[which(heteroplasmy=="yes")])),
+            nfams.maf=length(unique(FID[which(maf>=0.01)])))
+
+# dcounts.shared<-ddply(counts3,.(position),function(x){
+#   nfams.hets=length(unique(x$FID[which(x$heteroplasmy=="yes")]))
+#   nfams.maf=length(unique(x$FID[which(x$maf>=0.01)]))
+#   return(data.frame(nfams.maf,nfams.hets))
+# })
 
 
 #dcounts.shared<-ddply(dcounts3,.(position),summarize,nmaf=sum(nmaf),nhets=sum(nhets),diff=sum(diff))
@@ -224,8 +238,14 @@ for(i in 1:nrow(hets5)){
   }
 }
 
-dhets5.tstv<-ddply(hets5,.(position),summarize,nts=length(which(tstv=="ts")),ntv=length(which(tstv=="tv")))
-dhets5.tstv<-dhets5.tstv[order(-dhets5.tstv$ntv),]
+dhets5.tstv<-hets5%>%
+  group_by(position)%>%
+  summarize(nts=length(which(tstv=="ts")),
+            ntv=length(which(tstv=="tv")))%>%
+  arrange(-ntv)
+
+# dhets5.tstv<-ddply(hets5,.(position),summarize,nts=length(which(tstv=="ts")),ntv=length(which(tstv=="tv")))
+# dhets5.tstv<-dhets5.tstv[order(-dhets5.tstv$ntv),]
 
 
 #sites that are "problematic" based on test1:
@@ -272,37 +292,41 @@ hets6<-hets5[-which(hets5$position%in%x),]
 counts4<-counts3[-which(counts3$position%in%x),]
 
 #make sure there are no families with no heteroplasmies
-dcounts4<-ddply(counts4,.(fam_het_id),summarize,nhets=length(which(heteroplasmy=="yes")))
-which(dcounts4$nhets<1)
+dcounts4<-counts4%>%
+  group_by(fam_het_id)%>%
+  summarize(nhets=length(which(heteroplasmy=="yes")))
+
+#dcounts4<-ddply(counts4,.(fam_het_id),summarize,nhets=length(which(heteroplasmy=="yes")))
+#which(dcounts4$nhets<1)
 #no empty families. each famiy has at least one heteroplasmy in this table - good
 
 #find out which people have less than 2 tissues
-dcounts4.2t<-ddply(counts4,.(individual_id),summarize,ntissues=length(unique(tissue_id)))
-dcounts4.2c<-ddply(counts4,.(mother_id),summarize,nchildren=length(unique(individual_id)))
+dcounts4.2t<-counts4%>%
+  group_by(individual_id)%>%
+  summarize(ntissues=length(unique(tissue_id)))
+
+dcounts4.2c<-counts4%>%
+  group_by(mother_id)%>%
+  summarize(nchildren=length(unique(individual_id)))
+
+#dcounts4.2t<-ddply(counts4,.(individual_id),summarize,ntissues=length(unique(tissue_id)))
+#dcounts4.2c<-ddply(counts4,.(mother_id),summarize,nchildren=length(unique(individual_id)))
 
 #write cleaned table to file
-fwrite(counts4,"../../../files/Analysis/Fixing_heteroplasmy_table/hqcounts_cleaned_conservative_09272018.txt",sep="\t",col.names=T,row.names=F,quote=F)
+fwrite(counts4,
+       here("Data_files/hqcounts_cleaned_conservative_09272018.txt"),
+       sep="\t",
+       col.names=T,
+       row.names=F,
+       quote=F)
 
 #write cleaned heteroplasmy table to file
-fwrite(hets6,"../../../files/Analysis/Fixing_heteroplasmy_table/hq_cleaned_conservative_09272018.txt",sep="\t",col.names=T,row.names=F,quote=F)
-
-
-#####checking properties of samples removed ####
-
-prob.samples<-hets2[which(hets2$fqid%in%dups$V1|hets2$fqid%in%dups.33$fqid_old),]
-
-#exclude samples from F259 (m313)
-prob.samples<-prob.samples[-which(prob.samples$FID=="F259"),]
-
-prob.maf.distr<-ggplot(prob.samples,aes(position,maf),alpha=0.6)+
-  geom_point(size=0.5)+
-  theme_bw()+
-  facet_wrap(~fqid)+
-  geom_segment(aes(x=2817,xend=3370,y=0.6,yend=0.6),color="red")+
-  geom_segment(aes(x=10796,xend=11570,y=0.6,yend=0.6),color="blue")
-
-
-ggsave("../../../files/Analysis/Fixing_heteroplasmy_table/maf_along_position_rmsamples_09142018.pdf",prob.maf.distr)
+fwrite(hets6,
+       here("Data_files/Fixing_heteroplasmy_table/hq_cleaned_conservative_09272018.txt"),
+       sep="\t",
+       col.names=T,
+       row.names=F,
+       quote=F)
 
 
 ############ Adjust allele frequency for each sample such that it is consistent (for an allele) across all samples in a family for the same heteroplasmy ###########
@@ -311,13 +335,26 @@ ggsave("../../../files/Analysis/Fixing_heteroplasmy_table/maf_along_position_rms
 #this reference table will be used to adjust the allele frequency for each sample accordingly
 
 #dhets is a table which contains the 'reference' major and minor alleles
-dhets<-ddply(counts4,.(FID,position,fam_het_id),function(x){
+#write function to generate major and minor alleles for each FID, position combo
+f_refalleles<-function(x){
   major.list<-x$major[which(x$heteroplasmy=="yes")]
   major<-sample(major.list,1)
   minor.list<-x$minor[which(x$heteroplasmy=="yes" & x$major==major)]
   minor<-sample(minor.list,1)
-  return(data.frame(major=major,minor=minor))
-})
+  return(data.table(major=major,minor=minor))
+}
+
+dhets<-counts4%>%
+  group_by(FID,position,fam_het_id)%>%
+  do(f_refalleles(.))
+
+# dhets<-ddply(counts4,.(FID,position,fam_het_id),function(x){
+#   major.list<-x$major[which(x$heteroplasmy=="yes")]
+#   major<-sample(major.list,1)
+#   minor.list<-x$minor[which(x$heteroplasmy=="yes" & x$major==major)]
+#   minor<-sample(minor.list,1)
+#   return(data.frame(major=major,minor=minor))
+# })
 
 #define function to adjust allele frequency of all individuals in a family based on this reference
 adj.af<-function(x){
@@ -345,9 +382,18 @@ adj.af<-function(x){
   return(x)}
 
 #go through each family and 'fix' the allele frequency according to the reference alleles
-hq.counts<-ddply(counts4,.(FID,position),adj.af)
+hq.counts<-counts4%>%
+  group_by(FID,position)%>%
+  do(adj.af(.))
+
+# hq.counts<-ddply(counts4,.(FID,position),adj.af)
 
 #check whether this has been done correctly - the plot should look like half of an X - no off-diagonals should be observed
 ggplot(hq.counts,aes(maf,adj.f))+geom_point()+theme_bw()
 
-fwrite(hq.counts,"../../../files/Database/Heteroplasmy_tables/hq_counts_adj_frequency_09272018.txt",sep="\t",col.names=T,row.names=F,quote=F)
+fwrite(hq.counts,here("Data_files/hq_counts_adj_frequency_09272018.txt")
+       ,sep="\t",
+       col.names=T,
+       row.names=F,
+       quote=F)
+
