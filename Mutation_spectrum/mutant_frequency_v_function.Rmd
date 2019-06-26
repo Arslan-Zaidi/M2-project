@@ -24,6 +24,7 @@ library(ggplot2)
 library(dplyr)
 library(data.table)
 library(Biostrings)
+library(here)
 
 ```
 
@@ -33,7 +34,10 @@ library(Biostrings)
 
 ```{r load_context}
 #load heteroplasmies with sequence context info
-hq.context<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_syn_11282018.txt",header=T,sep="\t")
+hq.context<-fread(
+  here("Data_files/hq_adjf_ancestral_syn_11282018.txt"),
+  header=T,
+  sep="\t")
 
 #make column for mutant frequency
 #if the mutant frequency is the major allele, the mutant frequency is 1-MAF
@@ -50,7 +54,10 @@ hq.context2<-hq.context%>%
 
 ```{r }
 #apogee+mitomap
-pat.annot<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/syn_nsyn_annotation/pathogenic_annotation_03222019.txt",header=T,sep="\t")
+pat.annot<-fread(
+  here("Data_files/pathogenic_annotation_03222019.txt"),
+  header=T,
+  sep="\t")
 
 #add mutation_id column for merging with hq data
 pat.annot<-pat.annot%>%

@@ -1,0 +1,99 @@
+position	region	disease	mutation	source	ancestral_py	mutant_py	mutation_py
+583	RNA	MELAS / MM & EXIT	G583A	mitomap	C	T	C>T
+1606	RNA	AMDF	G1606A	mitomap	C	T	C>T
+1644	RNA	HCM+MELAS	G1644A	mitomap	C	T	C>T
+3243	RNA	MELAS / LS / DMDF / MIDD / SNHL / CPEO / MM / FSGS / ASD / Cardiac+multi-organ dysfunction	A3243G	mitomap	T	C	T>C
+3243	RNA	MM / MELAS / SNHL / CPEO	A3243T	mitomap	T	T	T>T
+3256	RNA	MELAS	C3256T	mitomap	C	T	C>T
+3258	RNA	MELAS / Myopathy	T3258C	mitomap	T	C	T>C
+3260	RNA	MMC / MELAS	A3260G	mitomap	T	C	T>C
+3271	RNA	MELAS / DM	T3271C	mitomap	T	C	T>C
+3280	RNA	Myopathy	A3280G	mitomap	T	C	T>C
+3291	RNA	MELAS / Myopathy / Deafness+Cognitive Impairment	T3291C	mitomap	T	C	T>C
+3302	RNA	MM	A3302G	mitomap	T	C	T>C
+3303	RNA	MMC	C3303T	mitomap	C	T	C>T
+3376	ND1	LHON MELAS overlap	G3376A	mitomap	C	T	C>T
+3460	ND1	LHON	G3460A	mitomap	C	T	C>T
+3635	ND1	LHON	G3635A	mitomap	C	T	C>T
+3697	ND1	MELAS / LS / LDYT	G3697A	mitomap	C	T	C>T
+3700	ND1	LHON	G3700A	mitomap	C	T	C>T
+3733	ND1	LHON	G3733A	mitomap	C	T	C>T
+3890	ND1	Progressive Encephalomyopathy / LS / Optic Atrophy	G3890A	mitomap	C	T	C>T
+3965	I	apogee	T>C	apogee	T	C	T>C
+4171	ND1	LHON	C4171A	mitomap	C	T	C>T
+4298	RNA	CPEO / MS	G4298A	mitomap	C	T	C>T
+4300	RNA	MICM	A4300G	mitomap	T	C	T>C
+4308	RNA	CPEO	G4308A	mitomap	C	T	C>T
+4332	RNA	Encephalopathy / MELAS	G4332A	mitomap	C	T	C>T
+5650	RNA	Myopathy	G5650A	mitomap	C	T	C>T
+5690	RNA	CPEO+ptosis+proximal myopathy	A5690G	mitomap	T	C	T>C
+5703	RNA	CPEO / MM	G5703A	mitomap	C	T	C>T
+6762	IV	apogee	C>T	apogee	C	T	C>T
+6937	IV	apogee	T>C	apogee	T	C	T>C
+7221	IV	apogee	T>C	apogee	T	C	T>C
+7445	CO1	SNHL	A7445G	mitomap	T	C	T>C
+7497	RNA	MM / EXIT	G7497A	mitomap	C	T	C>T
+7510	RNA	SNHL	T7510C	mitomap	T	C	T>C
+7511	RNA	SNHL	T7511C	mitomap	T	C	T>C
+8344	RNA	MERRF; Other - LD / Depressive mood disorder / leukoencephalopathy / HiCM	A8344G	mitomap	T	C	T>C
+8356	RNA	MERRF	T8356C	mitomap	T	C	T>C
+8363	RNA	MICM+DEAF / MERRF / Autism / LS / Ataxia+Lipomas	G8363A	mitomap	C	T	C>T
+8528	ATP8 / 6	Infantile cardiomyopathy	T8528C	mitomap	T	C	T>C
+8851	ATP6	BSN / Leigh syndrome	T8851C	mitomap	T	C	T>C
+8993	ATP6	NARP / Leigh Disease / MILS / other	T8993C	mitomap	T	C	T>C
+8993	ATP6	NARP / Leigh Disease / MILS / other	T8993G	mitomap	T	C	T>C
+9014	V	apogee	T>C	apogee	T	C	T>C
+9035	ATP6	Ataxia syndromes	T9035C	mitomap	T	C	T>C
+9101	V	apogee	T>C	apogee	T	C	T>C
+9176	ATP6	FBSN / Leigh Disease	T9176C	mitomap	T	C	T>C
+9176	ATP6	Leigh Disease / Spastic Paraplegia	T9176G	mitomap	T	C	T>C
+9185	ATP6	Leigh Disease / Ataxia syndromes / NARP-like disease	T9185C	mitomap	T	C	T>C
+9196	V	apogee	C>T	apogee	C	T	C>T
+9907	IV	apogee	C>T	apogee	C	T	C>T
+9973	IV	apogee	T>C	apogee	T	C	T>C
+10010	RNA	PEM	T10010C	mitomap	T	C	T>C
+10158	ND3	Leigh Disease	T10158C	mitomap	T	C	T>C
+10191	ND3	Leigh Disease / Leigh-like Disease / ESOC	T10191C	mitomap	T	C	T>C
+10197	ND3	Leigh Disease / Dystonia / Stroke / LDYT	G10197A	mitomap/apogee	C	T	C>T
+10663	ND4L	LHON	T10663C	mitomap	T	C	T>C
+11052	I	apogee	T>C	apogee	T	C	T>C
+11088	I	apogee	T>C	apogee	T	C	T>C
+11190	I	apogee	T>C	apogee	T	C	T>C
+11418	I	apogee	T>C	apogee	T	C	T>C
+11436	I	apogee	C>T	apogee	C	T	C>T
+11616	I	apogee	T>C	apogee	T	C	T>C
+11637	I	apogee	T>C	apogee	T	C	T>C
+11672	I	apogee	T>C	apogee	T	C	T>C
+11777	ND4	Leigh Disease	C11777A	mitomap	C	T	C>T
+11778	ND4	LHON / Progressive Dystonia	G11778A	mitomap/apogee	C	T	C>T
+12147	RNA	MERRF-MELAS / Encephalopathy	G12147A	mitomap	C	T	C>T
+12276	RNA	CPEO	G12276A	mitomap	C	T	C>T
+12315	RNA	CPEO / KSS	G12315A	mitomap	C	T	C>T
+12316	RNA	CPEO	G12316A	mitomap	C	T	C>T
+12706	ND5	Leigh Disease	T12706C	mitomap	T	C	T>C
+13042	ND5	Optic neuropathy/ retinopathy/ LD	G13042A	mitomap	C	T	C>T
+13051	ND5	LHON	G13051A	mitomap	C	T	C>T
+13093	I	apogee	C>T	apogee	C	T	C>T
+13322	I	apogee	T>C	apogee	T	C	T>C
+13345	I	apogee	C>T	apogee	C	T	C>T
+13513	ND5	Leigh Disease / MELAS / LHON-MELAS Overlap Syndrome	G13513A	mitomap	C	T	C>T
+13514	ND5	Leigh Disease / MELAS	A13514G	mitomap	T	C	T>C
+13708	I	apogee	C>T	apogee	C	T	C>T
+14459	ND6	LDYT / Leigh Disease	G14459A	mitomap	C	T	C>T
+14482	ND6	LHON	C14482A	mitomap	C	T	C>T
+14482	ND6	LHON	C14482G	mitomap	C	C	C>C
+14484	ND6	LHON	T14484C	mitomap	T	C	T>C
+14487	ND6	Dystonia / Leigh Disease / Ataxia / Ptosis / Epilepsy	T14487C	mitomap	T	C	T>C
+14495	ND6	LHON	A14495G	mitomap	T	C	T>C
+14568	ND6	LHON	C14568T	mitomap	C	T	C>T
+14674	RNA	Reversible COX deficiency myopathy	T14674C	mitomap	T	C	T>C
+14709	RNA	MM+DMDF / Encephalomyopathy / Dementia+diabetes+ophthalmoplegia	T14709C	mitomap	T	C	T>C
+14841	III	apogee	T>C	apogee	T	C	T>C
+14849	CYB	EXIT / Septo-Optic Dysplasia	T14849C	mitomap	T	C	T>C
+14864	CYB	MELAS	T14864C	mitomap	T	C	T>C
+15161	III	apogee	T>C	apogee	T	C	T>C
+15546	III	apogee	T>C	apogee	T	C	T>C
+15567	III	apogee	T>C	apogee	T	C	T>C
+15579	CYB	Multisystem Disorder, EXIT	A15579G	mitomap	T	C	T>C
+15758	III	apogee	T>C	apogee	T	C	T>C
+15812	III	apogee	C>T	apogee	C	T	C>T

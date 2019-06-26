@@ -27,6 +27,7 @@ library(ggrepel)
 library(tidyr)
 library(kableExtra)
 library(circlize)
+library(here)
 
 
 ```
@@ -41,7 +42,7 @@ First, we find heteroplasmies, which have the same major allele across all sampl
 ```{r anc_major}
 
 #read allfam file with adjusted frequency added for allelic consistency across family members
-allfam<-fread("~/Documents/mtproj_files/M2_new/files/Database/Heteroplasmy_tables/hq_counts_adj_frequency_09272018.txt",header=T,sep="\t")
+allfam<-fread(here("Data_files/hq_counts_adj_frequency_09272018.txt"),header=T,sep="\t")
 
 #separate heteroplasmies into a table
 hq<-allfam%>%
@@ -174,7 +175,11 @@ Next, we determined the trinucleotide sequence context of each heteroplasmy. Thi
 
 ```{r seq_context,cache=TRUE}
 #load count file
-count<-fread("../../../files/Analysis/variant_calling/trim.rd.counts/Allruns_08222018.trim.rd.counts",header=F,sep="\t")
+count<-fread(
+  "https://www.dropbox.com/s/gyk54cgek4kooo4/Allruns_08222018.trim.rd.counts?dl=1",
+  header=F,
+  sep="\t")
+
 colnames(count)<-c('fqid','ref','position','A','C','G','T','a','c','g','t','cvrg','nalleles','major','minor','maf')
 
 #write function to get sequence context from count file
@@ -300,13 +305,13 @@ Based on whether or not a mutaiton affects the protein sequence, we can annotate
 ```{r syn_annot,cache=TRUE}
 
 #read reference genome rcrs
-rcrs<-read.dna("../../../files/Database/rcrs.fasta",format="fasta")
+rcrs<-read.dna(here("Data_files/rcrs.fasta"),format="fasta")
 
 #mt.code
 mt.code<-getGeneticCode("2")
 
 #load genbank file - rcrs annotation for genes
-genedb<-fread("../../../files/Database/genedb.txt",header=T)
+genedb<-fread(here("Data_files/genedb.txt"),header=T)
 
 #filter only coding sequences
 genedb2<-genedb%>%
@@ -454,7 +459,11 @@ hq$syn[which(hq$major.aa!=hq$minor.aa)]<-"nsyn"
 hq.syn<-hq%>%
   select(FID,fqid,position,fq_het_id,major,minor,maf,run,gene,hq.gene.pos,hq.codon.pos,major.codon,minor.codon,major.aa,minor.aa,syn,fold.d,ancestral,mutant,context,ancestral.py,mutant.py,context.py)
 
-#fwrite(hq,"../../../files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_syn_11282018.txt",sep="\t",col.names=T,row.names=F,quote=F)
+fwrite(hq,
+       here("Data_files/hq_adjf_ancestral_syn_11282018.txt"),
+       sep="\t",
+       col.names=T,
+       row.names=F,quote=F)
 
 
 
