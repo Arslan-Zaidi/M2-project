@@ -19,6 +19,7 @@ library(data.table)
 library(dplyr)
 library(ggplot2)
 library(cowplot)
+library(here)
 
 ```
 
@@ -30,15 +31,20 @@ First, load the nucleotide counts for all identified heteroplasmies from all fam
 ```{r, eval=F}
 
 #read conservative table of heteroplasmies and their counts in all family members
-allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
-              Fixing_heteroplasmy_table/
-              hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
+allfam<-fread(
+  here("Data_files/hqcounts_cleaned_conservative_09272018.txt"),
+  sep="\t",
+  header=T)
+
 ```
 
 ```{r, results='asis', echo=F}
 
 #read conservative table of heteroplasmies and their counts in all family members
-allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
+allfam<-fread(
+  here("Data_files/hqcounts_cleaned_conservative_09272018.txt"),
+  sep="\t",
+  header=T)
 
 ```
 
@@ -129,9 +135,10 @@ Add 0s for remaining individuals - who don't carry any *de novo* heteroplasmies.
 
 #add individuals with no mutations whatsoever - which are also not present in the family
 #load complete family file
-famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
-               Fixing_heteroplasmy_table/
-               famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+famfile<-fread(
+  here("Data_files/famfile_cleared_conservative_09272018.txt"),
+  header=T,
+  sep="\t")
 
 ```
 
@@ -139,7 +146,10 @@ famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
 
 #add individuals with no mutations whatsoever - which are also not present in the family
 #load complete family file
-famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+famfile<-fread(
+  here("Data_files/famfile_cleared_conservative_09272018.txt"),
+  header=T,
+  sep="\t")
 
 ```
 

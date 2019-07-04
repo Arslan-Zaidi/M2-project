@@ -24,12 +24,13 @@ First, load the nucleotide counts for all identified heteroplasmies from all fam
 library(data.table)
 library(dplyr)
 library(ggplot2)
+library(here)
 
 #read conservative table of heteroplasmies and their counts in all family members
-allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
-              Fixing_heteroplasmy_table/
-              hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
-
+allfam<-fread(
+  here("Data_files/hqcounts_cleaned_conservative_09272018.txt"),
+       sep="\t",
+       header=T)
 
 ```
 
@@ -37,10 +38,13 @@ allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
 library(data.table)
 library(dplyr)
 library(ggplot2)
+library(here)
 
 #read conservative table of heteroplasmies and their counts in all family members
-allfam<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/hqcounts_cleaned_conservative_09272018.txt",sep="\t",header=T)
-
+allfam<-fread(
+  here("Data_files/hqcounts_cleaned_conservative_09272018.txt"),
+       sep="\t",
+       header=T)
 
 ```
 
@@ -150,15 +154,19 @@ Now add 0s - the kids who don't have any denovo mutations - for the regression.
 ```{r,eval=F}
 
 #for this, read in the whole famfile 
-famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/
-               Fixing_heteroplasmy_table/
-               famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+famfile<-fread(
+  here("Data_files/famfile_cleared_conservative_09272018.txt"),
+       header=T,
+       sep="\t")
 ```
 
 ```{r,results='asis',echo=F}
 
-#for this readin the whole famfile 
-famfile<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/Fixing_heteroplasmy_table/famfile_cleared_conservative_09272018.txt",header=T,sep="\t")
+#for this, read in the whole famfile 
+famfile<-fread(
+  here("Data_files/famfile_cleared_conservative_09272018.txt"),
+       header=T,
+       sep="\t")
 ```
 
 ```{r}

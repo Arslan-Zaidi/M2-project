@@ -72,53 +72,75 @@ hq.pat<-hq.pat%>%
                                  is.na(source)=="TRUE" ~ "N"))
 ```
 
-
-
 ### Frequency differences b/w pathogenic and non-pathogenic heteroplasmies
 
-
 ```{r freq_dfiff}
-#calculate the median frequency for pathogenic vs non-pathpgenic variants
+#calculate the maximum frequency for pathogenic vs non-pathpgenic variants
 hqpat_freq<-hq.pat%>%
   group_by(tissue,pathogenicity)%>%
-  summarize(median=median(mutant.f),mean=mean(mutant.f))
+  summarize(mean.f=mean(mutant.f),
+            max.f=max(mutant.f),
+            nobs=length(mutant.f))
 
+hqpat_freq
 ```
 
-Test for difference in heteroplasmy frequency between pathogenic and non-pathogenic heteroplasmies across both tissues.
+It's clear that the upper limit of the frequency at which pathogenic mutations exist in human tissues is much lower than that at which non-pathogenic mutations exist. Let's formally test this. We will use a parametric bootstrap approach to do this.
 
-```{r test_patall}
-#test whether the mutant frequency is different between neutral and pathogenic variants
-wtest.pat<-wilcox.test(data=hq.pat,mutant.f~pathogenicity)
-wtest.pat.p<-formatC(wtest.pat$p.value,digits=2,format="e")
+```{r bootstrap_limit}
 
-print(wtest.pat)
 
-```
+#write function to subsample and calculate max. frequency
+fmax.f<-function(x,n){
+  subsample<-replicate(10000,
+                       x%>%
+    pull(mutant.f)%>%
+      sample(size=n,
+             replace=T))
+  
+  return(data.table(sno=seq(1,10000,1),max.f=apply(subsample,2,max)))
+}
 
-Across blood only 
+#bootstrap
+fmax.boot<-hq.pat%>%
+  group_by(pathogenicity,tissue)%>%
+  do(fmax.f(.,23))
 
-```{r pat_bl}
-#test for difference in frequency b/w blood
-wtest.pat.bl<-wilcox.test(data=hq.pat[which(hq.pat$tissue=="bl"),],mutant.f~pathogenicity)
-wtest.pat.bl.p<-formatC(wtest.pat.bl$p.value,digits=2,format="e")
+#statistically test whether pathogenic mutations have lower max.f than non-pathogenic mutations (non-parametric)
+#calculation the proportion of pathogenic pseusosamples that have a greater maximum than the non-pathogenic pseudosamples
+dfmax<-dcast(fmax.boot,
+             sno~pathogenicity+tissue,
+             value.var="max.f")
 
-print(wtest.pat.bl)
-```
 
-Across cheek only
+# calculate for blood
+pat.bl.pvalue<-with(dfmax,
+                    length(which(P_bl>N_bl))/10000)
 
-```{r pat_ch}
-#test for difference in frequency b/w cheek
-wtest.pat.ch<-wilcox.test(data=hq.pat[which(hq.pat$tissue=="ch"),],mutant.f~pathogenicity)
-wtest.pat.ch.p<-formatC(wtest.pat.ch$p.value,digits=2,format="e")
+print(paste("Pvalue, pathogenic mutations in blood:",pat.bl.pvalue))
 
-print(wtest.pat.ch)
+#calculate for cheek
+pat.ch.pvalue<-with(dfmax,
+                    length(which(P_ch>N_ch))/10000)
+
+pval.dat=data.frame(tissue=c("bl","ch"),
+                    pvalue=c(pat.bl.pvalue,
+                             pat.ch.pvalue))
+
+pval.dat
+
+pval.dat=pval.dat%>%
+  mutate(plab=paste("Pvalue[fmax]:",
+                    pvalue,
+                    sep=""))
+
+
 ```
 
 Plot the frequency distribution of pathogenic and non-pathogenic heteroplasmies
 
 ```{r pltpat}
+
 #plot the distribution of mutant frequency for pat/non-pat variants
 plt_hqpat<-ggplot()+
   geom_boxplot(data=hq.pat,aes(tissue,
@@ -129,6 +151,19 @@ plt_hqpat<-ggplot()+
                              color=pathogenicity),
              position=position_jitterdodge(jitter.width = 0.2),
              alpha=0.4)+
+  geom_point(data=hqpat_freq,
+             aes(x=tissue,
+                 y=max.f,
+                 color=pathogenicity),
+             shape=42,
+             size=10,
+             position=position_jitterdodge(jitter.width = 0),
+             show.legend = F)+
+  geom_text(data=pval.dat,
+               aes(x=tissue,
+                   y=1.5,
+                   label = plab),
+            parse=T)+
   theme_bw()+
   theme(axis.text=element_text(size=14),
         axis.title=element_text(size=16),
@@ -138,7 +173,7 @@ plt_hqpat<-ggplot()+
        color="Path.")+
   scale_fill_discrete(labels=c("N","P"))+
   scale_x_discrete(labels=c("Blood","Cheek"))+
-  scale_y_log10(limits=c(0.005,1),
+  scale_y_log10(limits=c(0.005,1.5),
                 breaks=c(0.01,seq(0.1,1,0.2)))
 
 # ggsave("files/Analysis/mutation_spectrum/plt_hqpat_f_04022019.pdf",plt_hqpat,height=7,width=7,useDingbats=F)
@@ -160,73 +195,108 @@ Test for a difference in frequency b/w synonymous and non-synonymous heteroplasm
 hq.syn<-hq.context2%>%
   filter(syn!="")
   
-hq.syn.summary<-hq.syn%>%
+hqsyn_freq<-hq.syn%>%
   group_by(tissue,syn)%>%
-  summarize(median_f=median(mutant.f))
+  summarize(mean.f=mean(mutant.f),
+            max.f=max(mutant.f),
+            nobs=length(mutant.f))
 
-#test whether the mutant frequency is different between neutral and pathogenic variants
-wtest.syn<-wilcox.test(data=hq.syn,mutant.f~syn)
-wtest.syn.p<-formatC(wtest.syn$p.value,digits=2,format="e")
-
-print(wtest.syn)
+hqsyn_freq
 
 ```
 
-Test within blood tissue only.
+Non-synonymous mutations don't appear to be systematically under some frequency threshold relative to synonymous mutations. Let's test this formally. 
 
-```{r syn_bl}
 
-#test whether the mutant frequency is different in blood
-wtest.syn.bl<-wilcox.test(data=hq.syn[which(hq.syn$tissue=="bl"),],mutant.f~syn)
-wtest.syn.bl.p<-formatC(wtest.syn.bl$p.value,digits=2,format="e")
+```{r}
 
-print(wtest.syn.bl)
+#bootstrap
+fmaxsyn.boot<-hq.syn%>%
+  group_by(syn,tissue)%>%
+  do(fmax.f(.,68))
+
+#statistically test whether pathogenic mutations have lower max.f than non-pathogenic mutations (non-parametric)
+#calculation the proportion of pathogenic pseusosamples that have a greater maximum than the non-pathogenic pseudosamples
+dfmax_syn<-dcast(fmaxsyn.boot,
+             sno~syn+tissue,
+             value.var="max.f")
+
+
+# calculate for blood
+syn.bl.pvalue<-with(dfmax_syn,
+                    length(which(nsyn_bl>syn_bl))/10000)
+
+print(paste("Pvalue, non-synonymous mutations in blood:",syn.bl.pvalue))
+
+#calculate for cheek
+syn.ch.pvalue<-with(dfmax_syn,
+                    length(which(nsyn_ch>syn_ch))/10000)
+
+pvalsyn.dat=data.frame(tissue=c("bl","ch"),
+                    pvalue=c(syn.bl.pvalue,
+                             syn.ch.pvalue))
+
+pvalsyn.dat
+
+pvalsyn.dat=pvalsyn.dat%>%
+  mutate(plab=paste("Pvalue[fmax]:",
+                    pvalue,
+                    sep=""))
+
+
+
 
 ```
 
-Test within cheek tissue only
 
-```{r syn_ch}
-#test whether the mutant frequency is different in cheek
-wtest.syn.ch<-wilcox.test(data=hq.syn[which(hq.syn$tissue=="ch"),],mutant.f~syn)
-wtest.syn.ch.p<-formatC(wtest.syn.ch$p.value,digits=2,format="e")
-
-print(wtest.syn.ch)
-```
 Plot frequency distribution for synonymous and non-synonymous heteroplasmies
 
 ```{r plt_syn}
 
-hq.syn$syn<-factor(hq.syn$syn,levels=c("syn","nsyn"))
 
-#plot the distribution of mutant frequency for syn/non-syn variants
+#plot the distribution of mutant frequency for pat/non-pat variants
 plt_hqsyn<-ggplot()+
-  geom_boxplot(data=hq.syn,aes(syn,
+  geom_boxplot(data=hq.syn,aes(tissue,
                              mutant.f,
-                             color=tissue))+
-  geom_point(data=hq.syn,aes(x=syn,
-                             y=mutant.f,
-                             color=tissue),
-             position=position_jitterdodge(jitter.width=0.2),
+                             color=syn))+
+  geom_point(data=hq.syn,aes(x=tissue,
+                                 y=mutant.f,
+                             color=syn),
+             position=position_jitterdodge(jitter.width = 0.2),
              alpha=0.4)+
+  geom_point(data=hqsyn_freq,
+             aes(x=tissue,
+                 y=max.f,
+                 color=syn),
+             shape=42,
+             size=10,
+             position=position_jitterdodge(jitter.width = 0),
+             show.legend = F)+
+  geom_text(data=pvalsyn.dat,
+               aes(x=tissue,
+                   y=1.5,
+                   label = plab),
+            parse=T)+
   theme_bw()+
   theme(axis.text=element_text(size=14),
         axis.title=element_text(size=16),
         legend.text = element_text(size=14))+
   labs(x="Tissue type",
        y="Mutant allele frequency",
-       color="Syn/\nnonsyn")+
-  scale_color_discrete(labels=c("S","N"))+
+       color="Syn.")+
+  scale_fill_discrete(labels=c("NSyn","Syn"))+
   scale_x_discrete(labels=c("Blood","Cheek"))+
-  scale_y_log10(limits=c(0.005,1),
+  scale_y_log10(limits=c(0.005,1.5),
                 breaks=c(0.01,seq(0.1,1,0.2)))
 
-# ggsave("files/Analysis/mutation_spectrum/plt_hqsyn_f_04022019.pdf",plt_hqsyn,
+# ggsave(here("Mutation_spectrum/plt_hqsyn_f_06292018.png"),
+#        plt_hqsyn,
 #        height=7,
-#        width=7,useDingbats=F)
+#        width=7)
+
 
 plt_hqsyn
 
 ```
 
-Non-synonymous heteroplasmies are also present at lower frequencies relative to synonymous heteroplasmies but the difference is less significant in this case. This is possibly because not all non-synonymous variants might be deleterious or that the pathogenicity might vary a lot for non-synonymous heteroplasmies.
+The difference in max. frequency between synonymous and non-synonymous mutations is not statistically significant. This is possibly because not all non-synonymous variants might be deleterious or that the pathogenicity might vary a lot for non-synonymous heteroplasmies.
