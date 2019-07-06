@@ -1,0 +1,111 @@
+---
+title: "Branch length vs allele frequency"
+author: "Arslan Zaidi"
+date: "7/4/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#load libraries
+library(ggplot2)
+library(data.table)
+library(plyr)
+library(dplyr)
+library(here)
+
+#load functions needed to calculate Fst
+source(here("BLS/scripts/abs_functions_03152019.R"))
+```
+
+
+```{r}
+#write function to simulate drift forward in time.
+#outputs allele frequency for nloci number of loci
+#arguments: 
+# p = starting allele frequency, 
+# g = no. of generations, 
+# nloci = number of independent loc/replicates
+# nind = number of haploids
+sim.drift<-function(p,g,nloci=100,nind=1000){
+  nchrom<-round(nind)
+  updated.p1<-rep(p,nloci)
+  for(i in 1:g){
+    #updated.p1
+    updated.p1<-sapply(updated.p1,function(x){rbinom(1,nchrom,x)/nchrom})
+  }
+  return(updated.p1)
+}
+
+
+```
+
+```{r }
+
+#original ancestral population
+#initialize with 50 different starting frequencies
+p0=seq(0.01,0.5,0.01)
+p10=lapply(p0,function(x){
+  dxymat=matrix(NA,nrow=100,ncol=1)
+  for(i in 1:100){
+    #poplation1
+    p10.1<-sim.drift(p=0.5,g=10,nloci=100,nind=1000)
+    #population2
+    p10.2<-sim.drift(p=0.5,g=10,nloci=100,nind=1000)
+    #calculate fst between them
+    comps=t(mapply(fst_comps, p1=p10.1,p2=p10.2,n1=1000,n2=1000))
+    fst=sum(comps[,1])/sum(comps[,2])
+    #divergence
+    dxymat[i,1]=-log(1-fst)
+  }
+  dxydat=data.frame(dxy=dxymat[,1],p0=x)
+  return(dxydat)
+})
+p10=bind_rows(p10,.id="pno")
+colnames(p10)[2]<-"dxy"
+
+```
+
+
+```{r}
+
+#calculate median and 95% CI of divergence at each starting allele frequency
+dxy_summary<-p10%>%
+  group_by(p0)%>%
+  summarize(dxy_median=median(dxy),
+          dxy_lower=quantile(dxy,probs=0.025),
+          dxy_upper=quantile(dxy,probs=0.975))
+
+```
+
+```{r}
+
+#plot drift experienced by each loci wrt starting allele frequency
+plt<-ggplot(dxy_summary)+
+  geom_point(aes(p0,
+                 dxy_median),
+             color="red")+
+  geom_errorbar(aes(x=p0,
+                    ymin=dxy_lower,
+                    ymax=dxy_upper))+
+  theme_bw()+
+  geom_hline(yintercept=0.01,
+             color="red",
+             linetype="dashed")+
+  labs(x="Starting allele frequency",
+       y="Divergence between two populations")
+
+
+plt
+
+
+```
+
+
+
+
+
+

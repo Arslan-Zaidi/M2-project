@@ -41,6 +41,7 @@ library(forcats)
 library(KScorrect)
 library(gridExtra)
 library(ape)
+library(here)
 ```
 
 ### Data wrangling and annotation of heteroplasmies
@@ -50,7 +51,7 @@ Load heteroplasmy data and annotate heteroplasmies (e.g. which gene they are in,
 
 ```{r load_het_data_and_qc}
 #### load heteroplasmies - conservative (one mother and two children families only) #####
-hq.counts<-fread("~/Documents/mtproj_files/M2_new/files/Database/Heteroplasmy_tables/hq_counts_adj_frequency_09272018.txt",
+hq.counts<-fread(here("Data_files/hq_counts_adj_frequency_09272018.txt"),
                  header=T)
 
 #add unique identifiers to table
@@ -63,7 +64,10 @@ hq<-hq.counts%>%
   select(FID,fam_cat,fam_het_id,mother_id,mot_cat,mother_het_id,individual_id,individual_het_id,tissue_id,position,level,tissue,major,minor,adj.f,cvrg,age_collection,age_birth)
 
 ##load annotations
-annot<-fread("~/Documents/mtproj_files/M2_new/files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_syn_pathogenic_03222019.txt",header=T,sep="\t")
+annot<-fread(
+  here("Data_files/hq_adjf_ancestral_syn_pathogenic_03222019.txt"),
+  header=T,
+  sep="\t")
 
 #group genes by functional class
 annot<-annot%>%
@@ -132,7 +136,7 @@ Now I load functions that I wrote in a separate script to calculate Fst componen
 
 ```{r load_functions}
 #load functions to calculate Fst and Branch statistics
-source("~/Documents/mtproj_files/M2_new/git/M2_git/Branch_stats/abs_functions_03152019.R")
+source(here("BLS/scripts/abs_functions_03152019.R"))
 ```
 
 $\Large \widehat{F}_{st}^{Hudson} = \frac{ (f_{1} − f_{2})^{2} − \frac{f_{1}\cdot (1−f_{1}) }{n_{1}−1} − \frac{f_{2}\cdot (1−f_{2})}{n_{2}−1}}{f_{1}\cdot(1−f{1}) + f_{2}\cdot(1−f_{2})}$
@@ -818,8 +822,8 @@ bls_nsyn.perm.list=list()
 #generate random vector of syn/nsyn annotation based on tally
 #there are 200 coding heteroplasmies
 #sample 123 non-synonymous heteroplasmies
-#pb<-txtProgressBar(min=0,max=100,style=3)
-for(i in 1:100){
+pb<-txtProgressBar(min=0,max=10000,style=3)
+for(i in 1:10000){
   
   #sample 2 kids from multi-kid families
   #standardize mother child naming (e.g. g1-m1 -> m1-c1)
@@ -853,7 +857,7 @@ for(i in 1:100){
   
   bls_syn.perm.list[[i]]<-cal_bls_syn(shq_fst_syn2)
   bls_nsyn.perm.list[[i]]<-cal_bls_syn(shq_fst_nsyn2)
-  #setTxtProgressBar(pb,i)
+  setTxtProgressBar(pb,i)
   
 }
 
@@ -1007,8 +1011,8 @@ shq_fst_npat<-shq.fst%>%keep(function(x){x$pathogenicity[1]=="N"})
 bls_pat.perm.list=list()
 bls_npat.perm.list=list()
 
-#pb<-txtProgressBar(min=0,max=100,style=3)
-for(i in 1:100){
+pb<-txtProgressBar(min=0,max=10000,style=3)
+for(i in 1:10000){
   
   #sample 2 kids from multi-kid families
   #standardize mother child naming (e.g. g1-m1 -> m1-c1)
@@ -1043,7 +1047,7 @@ for(i in 1:100){
   
   bls_pat.perm.list[[i]]<-cal_bls_pat(shq_fst_pat3)
   bls_npat.perm.list[[i]]<-cal_bls_pat(shq_fst_npat3)
-  #setTxtProgressBar(pb,i)
+  setTxtProgressBar(pb,i)
   
 }
 
