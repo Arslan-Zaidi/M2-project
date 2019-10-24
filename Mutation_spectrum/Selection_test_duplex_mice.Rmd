@@ -1,0 +1,495 @@
+---
+title: "Selection test - mouse heteroplasmies (Barbara)"
+author: "Arslan Zaidi"
+date: "8/9/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+The goal here is to test whether the distribution of mutations observed in Barbara's duplex sequencing data exhibits signatures of purifying selection. To test for this, I will use the h~N~/h~S~ statistic (Li et al. 2015), which is similar in concept to the d~N~/d~S~ statistic.
+
+## Analysis
+
+First, we load all the required packages. 
+
+```{r}
+library(ggplot2)
+library(data.table)
+library(ape)
+library(Biostrings)
+library(dplyr)
+library(ggrepel)
+library(tidyr)
+library(here)
+
+```
+
+Load major and minor alleles observed in Duplex sequencing. Remove all sites where heteroplasmies were not observed i.e. minor allele is ".". Assume major allele is the ancestral state and the minor allele is the mutant allele.
+
+```{r}
+
+dat<-fread(here("Mutation_spectrum/barb_mutations"),header=T)
+
+hq<-dat%>%
+  filter(minor!=".")
+
+```
+
+extract sequence context for each heteroplasmy from the full count file. Then recode major/minor/sequence context to pyrmidines. 
+
+```{r}
+
+#write function to get sequence context from count file
+get.context<-function(pos,M){
+  #pos is numeric -site position on reference
+  #M is a string - ancestral allele - as a check
+  subdat<-dat%>%
+    filter(position%in%c(pos-1,pos,pos+1))%>%
+    select(position,major,minor)
+  if(subdat$major[2]==M){
+    context<-paste(subdat$major,collapse="")}
+  if(subdat$minor[2]==M){
+    context<-paste(subdat$major[1],subdat$minor[2],subdat$major[3],sep="")
+  }
+  return(context)
+}
+
+#extract context of major allele for each heteroplasmy
+hq$context<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  hq$context[i]<-get.context(hq$position[i],hq$major[i])
+}
+
+#recode alleles so ancestral allele is a pyrmidine - for mutational signatures
+hq$major.py<-NA
+hq$minor.py<-NA
+hq$context.py<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  if(hq$major[i]%in%c("G","A")){
+    hq$major.py[i]<-as.character(Biostrings::complement(DNAString(hq$major[i])))
+    hq$minor.py[i]<-as.character(Biostrings::complement(DNAString(hq$minor[i])))
+    hq$context.py[i]<-as.character(Biostrings::reverseComplement(DNAString(hq$context[i])))
+  }
+  if(hq$major[i]%in%c("C","T")){
+    hq$major.py[i]<-hq$major[i]
+    hq$minor.py[i]<-hq$minor[i]
+    hq$context.py[i]<-hq$context[i]
+  }
+  #setTxtProgressBar(pb,i)
+}
+
+```
+
+Load full mtDNA mouse reference genome and genbank file. 
+
+```{r}
+
+#read reference genome reference
+ref<-read.dna(here("Mutation_spectrum/mtDNA_Mouse.fasta"),format="fasta")
+
+#mt.code
+mt.code<-getGeneticCode("2")
+
+#load genbank file - ref annotation for genes
+genedb<-fread(here("Mutation_spectrum/mtDNA_mouse.gb.TXT"),header=T)
+```
+
+
+Annotate each heteroplasmy by which gene it's present in
+
+```{r}
+
+hq$gene<-NA
+for(i in 1:nrow(genedb)){
+  hq$gene[which(hq$position>=genedb$Start[i] & hq$position<=genedb$Stop[i])]<-genedb$Gene[i]
+}
+
+```
+
+Annotate heteroplasmies by whether they are synonymous/non-synonymous and by their fold degeneracy etc. This will be useful later for the h~N~/h~S~ test.
+
+
+```{r}
+
+#write function to return fold degeneracy for a site in a given codon
+fold.degeneracy<-function(codon,site){
+  aa<-Biostrings::translate(DNAString(codon),mt.code)
+  codon<-unlist(strsplit(codon,split=""))
+  nucs<-setdiff(c("a","c","g","t"),codon[site])
+  s<-1
+  for(l in 1:3){
+    mut.codon<-codon
+    mut.codon[site]<-nucs[l]
+    mt.aa<-translate(DNAString(paste(mut.codon,collapse="")),mt.code)
+    if(mt.aa==aa){s<-s+1}else{s<-s}
+  }
+  #if all 3 substitutions are nonsynonymous, site is 4-fold denegerate
+  return(s)
+}
+
+#calculate a number of things (e.g. fold degeneracy etc.)
+hq$hq.gene.pos<-NA
+hq$hq.codon.pos<-NA
+hq$major.codon<-NA
+hq$minor.codon<-NA
+hq$major.aa<-NA
+hq$minor.aa<-NA
+hq$fold.d<-NA
+#pb<-txtProgressBar(min=1,max=nrow(hq),style=3)
+for(i in 1:nrow(hq)){
+  gene.name<-hq$gene[i]
+  if(gene.name%in%genedb$Gene){
+    gene.start<-genedb$Start[which(genedb$Gene==hq$gene[i])]
+    gene.end<-genedb$Stop[which(genedb$Gene==hq$gene[i])]
+    gene.seq<-as.character(ref[(gene.start):(gene.end)])
+    gene.strand<-genedb$Strand[which(genedb$Gene==hq$gene[i])]
+    #hq.gene.pos<-hq$position[i]-(gene.start-1)
+    if(gene.strand==1){
+      hq.gene.pos<-hq$position[i]-(gene.start-1)
+      if(hq.gene.pos%%3==0){
+        hq.codon<-hq.gene.pos/3
+        hq.codon.pos<-3
+        hq$hq.codon.pos[i]<-3
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-2,hq.gene.pos-1,hq.gene.pos)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==1){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-1
+        hq$hq.codon.pos[i]<-1
+        hq.codon.seq<-gene.seq[c(hq.gene.pos,hq.gene.pos+1,hq.gene.pos+2)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==2){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-2
+        hq$hq.codon.pos[i]<-2
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-1,hq.gene.pos,hq.gene.pos+1)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      hq.major.seq<-hq.minor.seq<-hq.codon.seq
+      hq.major.seq[hq.codon.pos]<-as.character(hq$major[i])
+      hq.minor.seq[hq.codon.pos]<-as.character(hq$minor[i])
+      hq.major.aa<-as.character(translate(DNAString(paste(hq.major.seq,collapse="")),mt.code))
+      hq.minor.aa<-as.character(translate(DNAString(paste(hq.minor.seq,collapse="")),mt.code))
+      
+    }
+    if(gene.strand== -1){
+      gene.seq<-reverseComplement(DNAString(paste(gene.seq,collapse="")))
+      gene.seq<-unlist(strsplit(as.character(gene.seq),split=""))
+      hq.gene.pos<-gene.end-(hq$position[i]-1)
+      if(hq.gene.pos%%3==0){
+        hq.codon<-hq.gene.pos/3
+        hq.codon.pos<-3
+        hq$hq.codon.pos[i]<-3
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-2,hq.gene.pos-1,hq.gene.pos)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==1){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-1
+        hq$hq.codon.pos[i]<-1
+        hq.codon.seq<-gene.seq[c(hq.gene.pos,hq.gene.pos+1,hq.gene.pos+2)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      if(hq.gene.pos%%3==2){
+        hq.codon<-ceiling(hq.gene.pos/3)
+        hq.codon.pos<-2
+        hq$hq.codon.pos[i]<-2
+        hq.codon.seq<-gene.seq[c(hq.gene.pos-1,hq.gene.pos,hq.gene.pos+1)]
+        fold.d<-fold.degeneracy(paste(hq.codon.seq,collapse=""),hq.codon.pos)
+      }
+      hq.major.seq<-hq.minor.seq<-hq.codon.seq
+      major<-Biostrings::complement(DNAString(hq$major[i]))
+      minor<-Biostrings::complement(DNAString(hq$minor[i]))
+      hq.major.seq[hq.codon.pos]<-as.character(major)
+      hq.minor.seq[hq.codon.pos]<-as.character(minor)
+      hq.major.aa<-as.character(translate(DNAString(paste(hq.major.seq,collapse="")),mt.code))
+      hq.minor.aa<-as.character(translate(DNAString(paste(hq.minor.seq,collapse="")),mt.code))
+    }
+    hq$fold.d[i]<-fold.d
+    hq$hq.gene.pos[i]<-hq.gene.pos
+    hq$major.codon[i]<-paste(tolower(hq.major.seq),collapse="")
+    hq$minor.codon[i]<-paste(tolower(hq.minor.seq),collapse="")
+    hq$major.aa[i]<-hq.major.aa
+    hq$minor.aa[i]<-hq.minor.aa
+  }
+  #setTxtProgressBar(pb,i)
+}
+
+hq$syn<-NA
+hq$syn[which(hq$major.aa==hq$minor.aa)]<-"syn"
+hq$syn[which(hq$major.aa!=hq$minor.aa)]<-"nsyn"
+
+
+```
+
+Summarize the total number of mutations observed in each gene as well as overall across all genes
+
+```{r}
+#calculate total number of syn/nsyn mutations in every gene
+dhq.syn<-as.data.frame(hq%>%
+                         filter(gene%in%genedb$Gene)%>%
+                         group_by(gene,syn)%>%
+                         summarize(nhets=length(position)))
+
+#make sure each gene is represented at least twice (once for synonymous and once for non-synonymous numbers)
+table(dhq.syn$gene)
+
+#add dummy rows with 0 values for ND6 (syn)
+dhq.syn<-rbind(dhq.syn,data.frame(gene=c("ND6"),
+                                  syn=c("syn"),
+                                  nhets=0))
+#add numbers for entire genome for plotting
+ref_syn=sum(dhq.syn$nhets[which(dhq.syn$syn=="syn")])
+ref_nsyn=sum(dhq.syn$nhets[which(dhq.syn$syn=="nsyn")])
+
+dhq.syn<-rbind(dhq.syn,
+               data.frame(gene=c("ref","ref"),
+                          syn=c("nsyn","syn"),
+                          nhets=c(ref_nsyn,ref_syn)))
+
+#calculate total number of mutations by mutation type in coding sequences
+hq.spectrum<-hq%>%
+  filter(gene%in%genedb$Gene)%>%
+  group_by(gene,major,minor)%>%
+  summarize(nhets=length(position))
+
+```
+
+
+Now calculate no. of syn/nsyn *sites* in each gene and in the whole coding sequence. 
+
+```{r}
+
+#Create empty columns to store the number of syn/nsyn sites per gene
+genedb$syn.sites<-NA
+genedb$nsyn.sites<-NA
+
+#write function to calculate nsyn sites and syn sites for a single codon
+nei.sites<-function(codon){
+  aa<-Biostrings::translate(DNAString(codon),mt.code)
+  codon<-unlist(strsplit(codon,split=""))
+  s<-0
+  for(k in 1:3){
+    nucs<-setdiff(c("a","c","g","t"),codon[k])
+    for(l in 1:3){
+      mut.codon<-codon
+      mut.codon[k]<-nucs[l]
+      mt.aa<-Biostrings::translate(DNAString(paste(mut.codon,collapse="")),mt.code)
+      if(mt.aa==aa){s<-s+1/3}else{s<-s}
+    }
+  }
+  n<-3-s
+  return(c(syn.sites=s,nsyn.sites=n))
+}
+
+#apply this function to all codons for every gene
+for(i in 1:nrow(genedb)){
+  gene.start<-genedb$Start[i]
+  gene.end<-genedb$Stop[i]
+  gene.seq<-as.character(ref[c(gene.start:gene.end)])
+  if(genedb$Strand[i]==1){gene.seq<-gene.seq}
+  if(genedb$Strand[i]==-1){
+    gene.seq<-tolower(
+      unlist(
+        strsplit(
+          as.character(
+            reverseComplement(
+              DNAString(
+                paste(gene.seq,collapse="")))),split="")))}
+  if(length(gene.seq)%%3==0){
+    gene.seq<-gene.seq
+  }
+  if(length(gene.seq)%%3==1){
+    gene.seq<-c(gene.seq,"a","a")
+  }
+  if(length(gene.seq)%%3==2){
+    gene.seq<-c(gene.seq,"a")
+  }
+  gene.codons<-seqinr::splitseq(gene.seq,0,3)
+  #print(genedb2$gene[i])
+  
+  nsites<-sapply(gene.codons,nei.sites)
+  nsites<-apply(nsites,1,sum)
+  genedb$syn.sites[i]<-nsites[1]
+  genedb$nsyn.sites[i]<-nsites[2]
+  genedb$seq[i]<-paste(gene.seq,collapse="")
+}
+
+#convert genedb to long format for plotting and merging with hq object
+dgenedb.syn<-genedb%>%
+  select(Gene,syn.sites,nsyn.sites)%>%
+  melt(id.vars="Gene",variable.name="synonymity",value.name="nsites")%>%
+  mutate(syn=case_when(synonymity=="syn.sites"~"syn",
+                       synonymity=="nsyn.sites"~"nsyn"))
+
+#add ref to dgene.db
+ref_ssites<-sum(dgenedb.syn$nsites[which(dgenedb.syn$syn=="syn")])
+ref_nsites<-sum(dgenedb.syn$nsites[which(dgenedb.syn$syn=="nsyn")])
+
+dgenedb.syn<-rbind(dgenedb.syn,data.frame(Gene=c("ref","ref"),
+                                          synonymity=c("nsyn.sites","syn.sites"),
+                                          nsites=c(ref_nsites,ref_ssites),
+                                          syn=c("nsyn","syn")))
+colnames(dhq.syn)[1]<-"Gene"
+#merged dhq.syn and dgenedb.syn
+dmerged<-merge(dhq.syn,dgenedb.syn,by=c("Gene","syn"))
+```
+
+Calculate *observed* values of h~N~/h~S~ for each gene. This is done by dividing the number of observed syn (nsyn) mutations by the number of syn (nsyn) sites. 
+
+```{r}
+
+#calculate observed hN/hS
+dmerged<-dmerged%>%
+  mutate(prop=nhets/nsites)%>%
+  mutate(k=prop)
+
+mdmerged<-dmerged%>%
+  dcast(Gene~syn,value.var="k")%>%
+  mutate(hn_hs=nsyn/syn)
+
+
+```
+
+Generate neutral distribution of h~N~/h~S~ by bootstrapping from the observed mutation spectrum. For example, if there are 10 C>T mutations, mutate 10 Cs chosen uniformly at random to Ts. Then calculate h~N~/h~S~.
+
+```{r}
+
+#define function to bootstrap for each gene separarately
+dnds.boot<-function(gn){
+  if(gn=="ref"){
+    total_mutations=sum(hq.spectrum$nhets)
+    #concatenate all coding sequences
+    gene_seq=unlist(strsplit(paste(genedb$seq,collapse=""),split=""))
+    #create mutated sequence
+    mut_seq=gene_seq
+    hq_spec=hq.spectrum%>%
+      group_by(major,minor)%>%
+      summarize(nhets=sum(nhets))
+    syn_sites=sum(genedb$syn.sites)
+    nsyn_sites=sum(genedb$nsyn.sites)
+    
+  }
+  else{
+    db<-genedb%>%
+      filter(Gene==gn)
+    
+    hq_spec=hq.spectrum%>%
+      filter(gene==gn)
+    
+    total_mutations=sum(hq_spec$nhets)
+    
+    gene_seq<-unlist(strsplit(db$seq,split=""))
+    mut_seq=gene_seq
+    nsyn_sites=db$nsyn.sites
+    syn_sites=db$syn.sites
+  }
+  
+  for(i in 1:nrow(hq_spec)){
+    sites=which(gene_seq==tolower(hq_spec$major[i]))
+    nmutations=hq_spec$nhets[i]
+    #randomly sample these many sites to mutate
+    mut_sites=sample(sites,nmutations)
+    mut_seq[mut_sites]=tolower(hq_spec$minor[i])
+  }
+  
+  anc_codons<-seqinr::splitseq(gene_seq,0,3)
+  mut_codons<-seqinr::splitseq(mut_seq,0,3)
+  
+  #dissimilar codons
+  anc_mismatch=paste(anc_codons[which(anc_codons!=mut_codons)],collapse="")
+  mut_mismatch=paste(mut_codons[which(anc_codons!=mut_codons)],collapse="")
+  
+  
+  anc_aa<-unlist(strsplit(as.character(translate(DNAString(anc_mismatch),genetic.code = mt.code)),split=""))
+  mut_aa<-unlist(strsplit(as.character(translate(DNAString(mut_mismatch),genetic.code = mt.code)),split=""))
+  
+  nsyn=length(which(anc_aa!=mut_aa))
+  syn=total_mutations-nsyn
+  
+  hn=nsyn/nsyn_sites
+  hs=syn/syn_sites
+  hn_hs=hn/hs
+  if(hs==0){return(NA)}else{return(hn_hs)}
+  
+}
+
+
+#calculate neutral distribution for every gene and the whole ref coding sequence
+#apply function to each gene separately.
+gene_list=c("ref",unique(genedb$Gene))
+dnds_bootmat=matrix(NA,nrow=100,ncol=length(gene_list))
+for(j in 1:length(gene_list)){
+  dnds_bootmat[,j]<-replicate(100,dnds.boot(gene_list[j]))
+  print(gene_list[j])
+}
+
+```
+
+Plot the neutral distribution of h~N~/h~S~ (black) for each gene separately and the whole reference genome against the observed values (ref).
+
+```{r}
+
+colnames(dnds_bootmat)<-gene_list
+dnds_bootmat<-as_data_frame(dnds_bootmat)
+
+mdnds_bootmat<-melt(dnds_bootmat,variable.name="Gene",value.name="dn_ds")
+
+#generate 95% confidence interval from bootstrap data
+mdnds_summary<-mdnds_bootmat%>%
+  group_by(Gene)%>%
+  summarize(median=median(dn_ds,na.rm=T),
+            lower=quantile(dn_ds,probs=0.025,na.rm=T),
+            upper=quantile(dn_ds,probs=0.975,na.rm=T))
+
+#calculate number of heteroplasmies observed in each gene
+nhq_gene<-hq.spectrum%>%
+  group_by(gene)%>%
+  summarize(nhets=sum(nhets))
+nhq_gene<-rbind(nhq_gene,
+                data.frame(gene="ref",nhets=sum(hq.spectrum$nhets)))
+
+#remove ND6 because no synonymous mutations are observed. This will give us an infinite value for hn/hs
+
+mdnds_summary2<-mdnds_summary%>%
+  filter(Gene!="ND6")
+
+mdmerged2<-mdmerged%>%
+  filter(Gene!="ND6")
+
+nhq_gene2<-nhq_gene%>%
+  filter(gene!="ND6")
+
+plt_hnhs<-ggplot(mdnds_summary2)+
+  geom_point(aes(Gene,median))+
+  geom_errorbar(aes(Gene,ymin=lower,ymax=upper))+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=90,
+                                 size=14),
+        axis.text.y=element_text(size=14),
+        axis.title=element_text(size=16),
+        text=element_text(size=14))+
+  labs(x="Gene",y="hN/hS")+
+  geom_point(data=mdmerged2,aes(Gene,hn_hs),color="red")+
+  geom_text(data=nhq_gene2,aes(x=gene,y=10,label=nhets),angle=90,size=5)+
+  geom_hline(yintercept = 1,linetype="dashed",color="red")+
+  ylim(c(0,11))
+
+plt_hnhs
+
+```
+
+
+## Conclusion
+
+When we look at the overall mutation spectrum (ref), the observed rate (red point) of non-synonymous mutations is far with range of neutral expectations (red dotted line and the black distribution). Thus, there is no evidence that purifying selection has impacted the distribution of observed mutations.

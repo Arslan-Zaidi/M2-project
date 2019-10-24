@@ -158,7 +158,11 @@ shq.fst<- shq.fst%>%
 
 
 #write data.frame to file for later use
-# fwrite(shq.fst,"~/Documents/mtproj_files/M2_new/files/Analysis/Branch_stats/shq_fst_mot_hets_04092019.txt",sep="\t",col.names = T,row.names=F,quote=F)
+fwrite(shq.fst,here("Data_files/shq_fst_mot_hets_08082019.txt"),
+                    sep="\t",
+                    col.names = T,
+                    row.names=F,
+                    quote=F)
 
 ```
 
@@ -674,11 +678,21 @@ plt.agec_noboot<-ggplot(data=bls_agec_noboot2,aes(age_collection,length))+
         axis.text=element_text(size=14),
         axis.title=element_text(size=16))+
   labs(x="Age of individual at collection (years)",y="Divergence b/w blood and cheek")+
+  annotate(geom="text",
+           x=50,y=0.6,
+           label=paste("beta==",formatC(beta.bls_agec,digits=2)),
+           parse=T)+
+  annotate(geom="text",
+           x=50,y=0.55,
+           label=paste("p-value=",formatC(p.bls_agec,digits=2)))+
   geom_line(aes(age_collection,lm_pred),color="blue")
 
 
 
 plt.agec_noboot
+
+ggsave(here("BLS/BLS_tissuediv_individual.pdf"),plt.agec_noboot,
+       height=5,width=5)
 
 ```
 

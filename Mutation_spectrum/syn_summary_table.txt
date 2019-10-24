@@ -1,0 +1,14 @@
+gene	nsyn	syn
+ATP6	13	2
+ATP8	2	2
+COX1	8	12
+COX2	0	1
+COX3	6	4
+CYTB	14	4
+ND1	9	2
+ND2	7	8
+ND3	3	3
+ND4	26	23
+ND5	22	12
+ND6	4	5
+total	114	78

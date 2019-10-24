@@ -98,7 +98,7 @@ cal_fst<-function(dat,est="h"){
   fst.out$fam_cat<-unique(dat$fam_cat)
     #add mother category information
     fst.out$mot_cat<-unique(
-      dat$mot_cat)
+      dat$mot_cat[which(dat$mother_group==dat$individual_het_id)])
   #add mean.f across leaves of the tree
   #for filtering later on allele frequency
   #fst.out$max.f<-max(dat$adj.f)
@@ -443,6 +443,69 @@ sample2kids<-function(fst.obj){
   if(mot_cat%in%c("m1c3","m1c4","m1c5")){
     children.levels<-setdiff(fst.obj$ind1,"m1")
     sampled.children<-sort(sample(children.levels,2,replace=F))
+    fst.obj.tmp<-fst.obj[which(fst.obj$ind1%in%c("m1",sampled.children) &
+                                 fst.obj$ind2%in%c("m1",sampled.children)),]
+    fst.obj.tmp<-fst.obj.tmp%>%
+      mutate(ind1=case_when(ind1==sampled.children[1]~"c1",
+                            ind1==sampled.children[2]~"c2",
+                            !ind1%in%sampled.children~ind1),
+             ind2=case_when(ind2==sampled.children[1]~"c1",
+                            ind2==sampled.children[2]~"c2",
+                            !ind2%in%sampled.children~ind2))%>%
+      mutate(pair=paste(ind1,"_",tis1,".",ind2,"_",tis2,sep=""))
+  }
+  #standardize notation for g1m2 and t1g2
+  if(mot_cat%in%c("g1m2")){
+    fst.obj.tmp<-fst.obj%>%
+      mutate(ind1=case_when(ind1=="m1"~"c1",
+                            ind1=="m2"~"c2",
+                            ind1=="g1"~"m1"),
+             ind2=case_when(ind2=="m1"~"c1",
+                            ind2=="m2"~"c2",
+                            ind2=="g1"~"m1"))%>%
+      mutate(pair=case_when(ind1=="c1"&ind2=="c2"~paste(ind1,"_",tis1,".",ind2,"_",tis2,sep=""),
+                            ind1=="m1"&ind2=="c1"~paste(ind2,"_",tis2,".",ind1,"_",tis1,sep=""),
+                            ind1=="m1"&ind2=="c2"~paste(ind2,"_",tis2,".",ind1,"_",tis1,sep=""),
+                            ind1==ind2~paste(ind1,"_",tis1,".",ind2,"_",tis2,sep="")))
+  }
+  
+  if(mot_cat%in%c("t1g2")){
+    fst.obj.tmp<-fst.obj%>%
+      mutate(ind1=case_when(ind1=="g1"~"c1",
+                            ind1=="g2"~"c2",
+                            ind1=="t"~"m1"),
+             ind2=case_when(ind2=="g1"~"c1",
+                            ind2=="g2"~"c2",
+                            ind2=="t"~"m1"))%>%
+      mutate(pair=paste(ind1,"_",tis1,".",ind2,"_",tis2,sep=""))
+  }
+  
+  fst.obj.tmp<-fst.obj.tmp%>%
+    mutate(branch.type=case_when(pair%in%c("c1_bl.c1_ch","c1_ch.c1_bl","m1_bl.m1_ch","m1_ch.m1_bl","c2_bl.c2_ch","c2_ch.c2_bl")~"bl2ch.div",
+                                 pair%in%c("c1_bl.m1_bl","c2_bl.m1_bl")~"m_bl.c_bl",
+                                 pair%in%c("c1_bl.m1_ch","c2_bl.m1_ch","c1_ch.m1_bl","c2_ch.m1_bl")~"m_bl.c_ch",
+                                 pair%in%c("c1_ch.m1_ch","c2_ch.m1_ch")~"m_ch.c_ch",
+                                 pair%in%c("c1_bl.c2_bl")~"c_bl.c_bl",
+                                 pair%in%c("c1_ch.c2_ch")~"c_ch.c_ch",
+                                 pair%in%c("c1_bl.c2_ch","c1_ch.c2_bl")~"c_bl.c_ch"))
+  
+  return(fst.obj.tmp)
+  
+}
+
+#write function to sample 2 kids from each mother (if she has more than 2)
+#oldest and youngest of the two to get more divergence and more power
+#also reformat dataframe for bls calculations
+#this is useful if fst needs to be calculated using the ratio of averages method
+oldnyoung<-function(fst.obj){
+  mot_cat=unique(fst.obj$mot_cat)
+  #if 2 kids, return without changing
+  if(mot_cat==c("m1c2")){fst.obj.tmp<-fst.obj}
+  #if>2kids, sample 1 and rename them to be c1 and c2 based on age
+  if(mot_cat%in%c("m1c3","m1c4","m1c5")){
+    children.levels<-setdiff(fst.obj$ind1,"m1")
+    # sampled.children<-sort(sample(children.levels,2,replace=F))
+    sampled.children<-c(children.levels[1], children.levels[length(children.levels)])
     fst.obj.tmp<-fst.obj[which(fst.obj$ind1%in%c("m1",sampled.children) &
                                  fst.obj$ind2%in%c("m1",sampled.children)),]
     fst.obj.tmp<-fst.obj.tmp%>%

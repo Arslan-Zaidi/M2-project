@@ -9,18 +9,21 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+Here, we test whether the initial heteroplasmy frequency in the root of the tree impacts the branch lenghts estimated using BLS. To do this, I will simulate heteroplasmies under drift in two populations that have diverged froma single ancestral population using a neutral Wright-Fisher model and estimate from the resulting frequencies, the divergence, or branch lengths, between the two populations.
+
 ```{r}
 #load libraries
 library(ggplot2)
 library(data.table)
-library(plyr)
 library(dplyr)
 library(here)
 
 #load functions needed to calculate Fst
-source(here("BLS/scripts/abs_functions_03152019.R"))
+source(file=here("BLS/scripts/abs_functions_03152019.R"))
 ```
 
+Write function simulate drift in a heteroplasmy forward in time. 
 
 ```{r}
 #write function to simulate drift forward in time.
@@ -42,6 +45,8 @@ sim.drift<-function(p,g,nloci=100,nind=1000){
 
 
 ```
+
+Carry out the simulation and estimate divergence between the two populations. 
 
 ```{r }
 
@@ -67,12 +72,13 @@ p10=lapply(p0,function(x){
 p10=bind_rows(p10,.id="pno")
 colnames(p10)[2]<-"dxy"
 
+
 ```
 
+Calculate median and 95% CI of divergence at each starting allele frequency
 
 ```{r}
 
-#calculate median and 95% CI of divergence at each starting allele frequency
 dxy_summary<-p10%>%
   group_by(p0)%>%
   summarize(dxy_median=median(dxy),
@@ -81,9 +87,10 @@ dxy_summary<-p10%>%
 
 ```
 
+Plot drift experienced by each loci wrt starting allele frequency
+
 ```{r}
 
-#plot drift experienced by each loci wrt starting allele frequency
 plt<-ggplot(dxy_summary)+
   geom_point(aes(p0,
                  dxy_median),
@@ -92,11 +99,13 @@ plt<-ggplot(dxy_summary)+
                     ymin=dxy_lower,
                     ymax=dxy_upper))+
   theme_bw()+
+  theme(axis.text.x=element_text(angle=90))+
   geom_hline(yintercept=0.01,
              color="red",
              linetype="dashed")+
   labs(x="Starting allele frequency",
-       y="Divergence between two populations")
+       y="Divergence between two populations")+
+  scale_x_continuous(breaks=c(0.01,0.1,0.2,0.3,0.4,0.5))
 
 
 plt
@@ -105,7 +114,17 @@ plt
 ```
 
 
+### Conclusion: The divergence between two populations estimated from their allele frequencies is not impacted by the initial frequency. 
 
+Save to output file
 
+```{r}
+
+ggsave(here("BLS/BLS_wrt_starting_af.pdf"),
+       plt,
+       height=4,
+       width=6)
+
+```
 
 

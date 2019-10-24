@@ -83,6 +83,7 @@ hqpat_freq<-hq.pat%>%
             nobs=length(mutant.f))
 
 hqpat_freq
+
 ```
 
 It's clear that the upper limit of the frequency at which pathogenic mutations exist in human tissues is much lower than that at which non-pathogenic mutations exist. Let's formally test this. We will use a parametric bootstrap approach to do this.
@@ -142,41 +143,31 @@ Plot the frequency distribution of pathogenic and non-pathogenic heteroplasmies
 ```{r pltpat}
 
 #plot the distribution of mutant frequency for pat/non-pat variants
+hq.pat$pathogenicity=factor(hq.pat$pathogenicity,levels=c("P","N"))
 plt_hqpat<-ggplot()+
   geom_boxplot(data=hq.pat,aes(tissue,
                              mutant.f,
-                             color=pathogenicity))+
+                             color=pathogenicity),
+               size=1)+
   geom_point(data=hq.pat,aes(x=tissue,
                                  y=mutant.f,
                              color=pathogenicity),
              position=position_jitterdodge(jitter.width = 0.2),
-             alpha=0.4)+
-  geom_point(data=hqpat_freq,
-             aes(x=tissue,
-                 y=max.f,
-                 color=pathogenicity),
-             shape=42,
-             size=10,
-             position=position_jitterdodge(jitter.width = 0),
-             show.legend = F)+
-  geom_text(data=pval.dat,
-               aes(x=tissue,
-                   y=1.5,
-                   label = plab),
-            parse=T)+
+             size=0.5)+
   theme_bw()+
   theme(axis.text=element_text(size=14),
         axis.title=element_text(size=16),
-        legend.text = element_text(size=14))+
+        legend.text = element_text(size=14),
+        panel.grid.major.x = element_blank())+
   labs(x="Tissue type",
        y="Mutant allele frequency",
        color="Path.")+
   scale_fill_discrete(labels=c("N","P"))+
   scale_x_discrete(labels=c("Blood","Cheek"))+
   scale_y_log10(limits=c(0.005,1.5),
-                breaks=c(0.01,seq(0.1,1,0.2)))
+                breaks=c(0.01,seq(0,1,0.5)))
 
-# ggsave("files/Analysis/mutation_spectrum/plt_hqpat_f_04022019.pdf",plt_hqpat,height=7,width=7,useDingbats=F)
+ggsave(here("../files/Analysis/mutation_spectrum/plt_hqpat_f_08212019.pdf"),plt_hqpat,height=4,width=4,useDingbats=F)
 
 
 
@@ -258,25 +249,13 @@ Plot frequency distribution for synonymous and non-synonymous heteroplasmies
 plt_hqsyn<-ggplot()+
   geom_boxplot(data=hq.syn,aes(tissue,
                              mutant.f,
-                             color=syn))+
+                             color=syn),
+               size=1)+
   geom_point(data=hq.syn,aes(x=tissue,
                                  y=mutant.f,
                              color=syn),
              position=position_jitterdodge(jitter.width = 0.2),
-             alpha=0.4)+
-  geom_point(data=hqsyn_freq,
-             aes(x=tissue,
-                 y=max.f,
-                 color=syn),
-             shape=42,
-             size=10,
-             position=position_jitterdodge(jitter.width = 0),
-             show.legend = F)+
-  geom_text(data=pvalsyn.dat,
-               aes(x=tissue,
-                   y=1.5,
-                   label = plab),
-            parse=T)+
+             size=0.5)+
   theme_bw()+
   theme(axis.text=element_text(size=14),
         axis.title=element_text(size=16),
@@ -287,12 +266,13 @@ plt_hqsyn<-ggplot()+
   scale_fill_discrete(labels=c("NSyn","Syn"))+
   scale_x_discrete(labels=c("Blood","Cheek"))+
   scale_y_log10(limits=c(0.005,1.5),
-                breaks=c(0.01,seq(0.1,1,0.2)))
+                breaks=c(0.01,seq(0.1,1,0.5)))
 
-# ggsave(here("Mutation_spectrum/plt_hqsyn_f_06292018.png"),
-#        plt_hqsyn,
-#        height=7,
-#        width=7)
+ggsave(here("../files/Analysis/mutation_spectrum/plt_hqsyn_f_08212019.pdf"),
+        plt_hqsyn,
+        height=4,
+        width=4,
+       useDingbats=F)
 
 
 plt_hqsyn
@@ -300,3 +280,5 @@ plt_hqsyn
 ```
 
 The difference in max. frequency between synonymous and non-synonymous mutations is not statistically significant. This is possibly because not all non-synonymous variants might be deleterious or that the pathogenicity might vary a lot for non-synonymous heteroplasmies.
+
+#Table of synonymous/non-synonymous and pathogenic/non-pathogenic mutations

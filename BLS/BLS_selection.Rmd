@@ -1,0 +1,450 @@
+---
+title: "BLS selection test"
+author: "Arslan Zaidi"
+date: "8/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r pkgs, echo=F}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(kableExtra)
+library(forcats)
+library(KScorrect)
+library(gridExtra)
+library(ape)
+library(here)
+```
+
+### Selection tests using BLS
+
+The branch statistic methods (LSBL [@Shriver2004], PBS [@Yi2010], and ABS [@Cheng2017]) were designed to test for selection. Let's use BLS to do the same with heteroplasmy data. The point is to divide heteroplasmies into categories based on their function or impact (synonymous/non-synonymous) and test whether some categories exhibit more drift than others.
+
+Let's load pre-calculated Fst components that we will need to calculate branch lengths. 
+
+```{r load_functions}
+#load functions to calculate Fst and Branch statistics
+source(here("BLS/scripts/abs_functions_04252019.R"))
+```
+
+```{r}
+
+shq.fst<-fread(here("Data_files/shq_fst_mot_hets_08082019.txt"),
+               header=T,sep="\t")
+
+#Now rename heteroplasmies as pathogenic and synonymous, instead of non-pathogenic. This is because we are less likely to capture deleterious mutations for the neutral background if we include all "non-pathogenic" heteroplasmies. Sticking to "synonymous" mutations is a safer bet. 
+shq.fst<-shq.fst%>%
+  mutate(pathogenicity=replace(pathogenicity,
+                               (pathogenicity=="N" & syn=="nsyn")|
+                                 (pathogenicity==""),NA))
+
+#split shq.fst into a list for further analysis
+shq.fst<-split(shq.fst,f=shq.fst$mother_group)
+
+#remove cases with one mother and one child
+shq.fst<-shq.fst%>%
+  keep(function(x){x$mot_cat[1]%ni%c("t1g1","g1m1")})
+
+```
+
+Now calculate BLS for synonymous and non-synonymous mutations first. Tabulate number of synonymous/non-synonymous heteroplasmies as well as coding/non-coding heteroplasmies
+
+```{r syn_tally, cache=TRUE}
+
+#tabulate how many heteroplasmies are synonymous vs non-synonymous and how many are non-coding
+syn.tally<-bind_rows(shq.fst)%>%
+  distinct(mother_group,syn)%>%
+  mutate(syn=ifelse(syn=="","non-cds",syn))%>%
+  group_by(syn)%>%
+  count()
+
+syn.tally
+```
+
+There are 77 synonymous heteroplasmies, 123 non-synonymous heteroplasmies and 158 non-coding heteroplasmies. When bootstrapping heteroplasmies, we will subsample 77 heteroplasmies from each group. Only 100 bootstraps carried out here to save time. The results in the paper are for 1000 bootstraps.
+
+```{r syn_permute}
+
+####calculate BLS for syn/nonsyn mutations
+#permutation test for synonymous-non-synonymous sites
+shq.fst.coding<-shq.fst%>%keep(function(x){x$syn[1]!=""})
+
+shq_fst_syn<-shq.fst%>%keep(function(x){x$syn[1]=="syn"})
+shq_fst_nsyn<-shq.fst%>%keep(function(x){x$syn[1]=="nsyn"})
+
+#sample 2 kids from multi-kid families
+#standardize mother child naming (e.g. g1-m1 -> m1-c1)
+#also recode each pairwise distance to a specific branch type
+shq_fst_syn1<-lapply(shq_fst_syn,oldnyoung)
+shq_fst_nsyn1<-lapply(shq_fst_nsyn,oldnyoung)
+
+#create empty list to populate results for each df
+bls_syn.perm.list=list()
+bls_nsyn.perm.list=list()
+#generate random vector of syn/nsyn annotation based on tally
+#there are 200 coding heteroplasmies
+#sample 123 non-synonymous heteroplasmies
+pb<-txtProgressBar(min=0,max=10000,style=3)
+for(i in 1:10000){
+  
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  # shq_fst_syn1<-lapply(shq_fst_syn,oldnyoung)
+  # shq_fst_nsyn1<-lapply(shq_fst_nsyn,oldnyoung)
+  
+  #subsample non-synonymous heteroplasmies
+  #to match synonymous heteroplasmies
+  shq_fst_nsyn1.1<-sample(shq_fst_nsyn1,77,replace=F)
+  
+  shq_fst_coding1<-c(shq_fst_nsyn1.1,shq_fst_syn1)
+  
+  #totaling 154 heteroplasmies
+  #artificially create 77 synonymous heteroplasmies
+  #and 77 non-synonymous heteroplasmies
+  nsyn_ix=sample(154,77,replace=F)
+  syn_ix=setdiff(seq(1,154),nsyn_ix)
+  shq_fst_syn2<-shq_fst_coding1[syn_ix]
+  shq_fst_nsyn2<-shq_fst_coding1[nsyn_ix]
+  
+  #change synonymous labels
+  shq_fst_syn2<-lapply(shq_fst_syn2,function(x){
+    x$syn<-"syn"
+    return(x)
+  })
+  shq_fst_nsyn2<-lapply(shq_fst_nsyn2,function(x){
+    x$syn<-"nsyn"
+    return(x)
+  })
+  
+  bls_syn.perm.list[[i]]<-cal_bls_syn(shq_fst_syn2)
+  bls_nsyn.perm.list[[i]]<-cal_bls_syn(shq_fst_nsyn2)
+  setTxtProgressBar(pb,i)
+  
+}
+
+bls_syn.perm.df<-bind_rows(bls_syn.perm.list,.id="sno")
+bls_nsyn.perm.df<-bind_rows(bls_nsyn.perm.list,.id="sno")
+bls_synall.perm.df<-rbind(bls_syn.perm.df,bls_nsyn.perm.df)  
+
+
+mbls.syn.perm.df.ci<-bls_synall.perm.df%>%
+  group_by(syn,branch.type)%>%
+  summarize(median=median(length),
+            lower=quantile(length,probs=0.025),
+            upper=quantile(length,probs=0.975))%>%
+  mutate(lower=ifelse(lower<0,0,lower))
+
+bls_syn.perm.merged<-merge(bls_syn.perm.df,bls_nsyn.perm.df,by=c("sno","branch","branch.type"))
+bls_syn.perm.merged<-bls_syn.perm.merged%>%
+  mutate(diff=length.x-length.y)%>%
+  group_by(sno,branch.type)%>%
+  summarize(diff=mean(diff))
+
+mbls.syn_diff.perm.ci<-bls_syn.perm.merged%>%
+  group_by(branch.type)%>%
+  summarize(median=median(diff),
+            lower=quantile(diff,probs=0.025),
+            upper=quantile(diff,probs=0.975))
+
+#calculate observed values of difference in branch length between syn and nsyn
+shq_fst_syn.obs<-lapply(shq_fst_syn,oldnyoung)
+shq_fst_nsyn.obs<-lapply(shq_fst_nsyn,oldnyoung)
+
+bls_syn.obs<-cal_bls_syn(shq_fst_syn.obs)
+bls_nsyn.obs<-cal_bls_syn(shq_fst_nsyn.obs)
+
+bls_syn.obs<-bls_syn.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_nsyn.obs<-bls_nsyn.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_syn.obs.merged<-merge(bls_syn.obs,bls_nsyn.obs,by=c("branch.type"))
+bls_syn.obs.merged<-bls_syn.obs.merged%>%
+  mutate(diff=length.x-length.y)
+
+#calculate p-values
+bls_syn.obs.merged$pvalue<-NA
+for(i in 1:5){
+  branch.name=bls_syn.obs.merged$branch.type[i]
+  #observed value
+  obs.diff<-bls_syn.obs.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  permdiff<-bls_syn.perm.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  bls_syn.obs.merged$pvalue[i]<-length(which(permdiff>obs.diff))/length(permdiff)
+}
+
+bls_syn.obs.merged<-bls_syn.obs.merged%>%
+  mutate(direction=case_when(diff<0~"down",
+                             diff>0~"up"))
+
+```
+
+```{r plt_synpermute}
+
+#plot syn-nsyn difference
+plt_bls_syndiff.perm<-ggplot(bls_syn.perm.merged)+
+  geom_violin(scale="width",
+              trim=T,
+              aes(branch.type,
+                  diff,
+                  fill=branch.type))+
+  geom_point(data=mbls.syn_diff.perm.ci,
+             aes(branch.type,median),
+             size=2)+
+  geom_errorbar(data=mbls.syn_diff.perm.ci,
+                aes(branch.type,ymin=lower,ymax=upper),
+                width=0.1,
+                size=0.5)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90),
+        legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.x=element_blank())+
+  labs(x="Branch type",y="Difference in branch length\n
+       (synonymous - non-synonymous)")+
+  geom_errorbar(data=bls_syn.obs.merged,aes(x=branch.type,
+                                         ymin=diff,
+                                         ymax=diff),
+             color="black",
+             width=0.5)+
+  scale_fill_manual(values=c("#fd8f24","#919c4c","#919c4c","#c03728","#f5c041"))+
+    scale_x_discrete(labels=c("Blood-cheek",
+                              "Mother-child1\n(overall)",
+                              "Mother-child2\n(overall)",
+                              "Child-child",
+                              "Mother-Child\n(pre-oocyte split)"))+
+  geom_text(data=bls_syn.obs.merged,aes(x=branch.type,
+                                        y=0.9,
+                                        label=format(round(pvalue,
+                                                           digits=3),
+                                                     nsmall=3)),
+            size=14/2.8,
+            angle=90)+
+  scale_shape_manual(values=c(25,24))+
+  ylim(c(-1,1.01))
+
+fwrite(bls_syn.perm.merged,here("../files/Analysis/Branch_stats/dat_bls_synperm_08212018.txt"),sep="\t",col.names=F,quote=F)
+# 
+
+ggsave(here("../files/Analysis/Branch_stats/plt_bls_synperm_08212019.pdf"),
+       plt_bls_syndiff.perm,
+       height=5,
+       width=4,
+       useDingbats=F)
+
+plt_bls_syndiff.perm
+```
+
+The plot shows that the branches for synonymous heteroplasmies are longer than the branches for non-synonymous heteroplasmies, particularly in the germline. This suggests that synonymous heteroplasmies experience more drift relative to non-synonymous heteroplasmies, likely because negative selection prevents non-synoymous heteroplasmies from drifting to very high frequencies.
+
+
+Now let's calculate BLS for pathogenic/non-pathogenic mutations. Tally number of pathogenic and non-pathogenic heteroplasmies. 
+
+```{r pat_tally}
+
+#tabulate how many heteroplasmies are synonymous vs non-synonymous and how many are non-coding
+pat.tally<-bind_rows(shq.fst)%>%
+  distinct(mother_group,pathogenicity)%>%
+  group_by(pathogenicity)%>%
+  count()
+
+pat.tally
+
+
+```
+
+There are 34 pathogenic heteroplasmies and 321 neutal heteroplasmies. Bootstrap and generate BLS distribution for each. 
+
+```{r pat_npat_perm}
+
+shq_fst_pat<-shq.fst%>%keep(function(x){x$pathogenicity[1]=="P"})
+shq_fst_npat<-shq.fst%>%keep(function(x){x$pathogenicity[1]=="N"})
+
+#sample 2 kids from multi-kid families
+#standardize mother child naming (e.g. g1-m1 -> m1-c1)
+#also recode each pairwise distance to a specific branch type
+shq_fst_pat1<-lapply(shq_fst_pat, oldnyoung)
+shq_fst_npat1<-lapply(shq_fst_npat,oldnyoung)
+
+#create empty list to populate results for each df
+bls_pat.perm.list=list()
+bls_npat.perm.list=list()
+
+pb<-txtProgressBar(min=0,max=10000,style=3)
+for(i in 1:10000){
+  
+  #sample 2 kids from multi-kid families
+  #standardize mother child naming (e.g. g1-m1 -> m1-c1)
+  #also recode each pairwise distance to a specific branch type
+  # shq_fst_pat1<-lapply(shq_fst_pat,sample2kids)
+  # shq_fst_npat1<-lapply(shq_fst_npat,sample2kids)
+  
+  #subsample non-pathogenic heteroplasmies
+  #to match number of pathogenic heteroplasmies
+  shq_fst_npat1.1<-sample(shq_fst_npat1,34,replace=F)
+  
+  shq_fst_pat2<-c(shq_fst_npat1.1,shq_fst_pat1)
+  
+  #totaling 62 heteroplasmies
+  #artificially create 31 pathogenic heteroplasmies
+  #and 31 non-pathogenic heteroplasmies
+  #by shuffling labels
+  npat_ix=sample(68,34,replace=F)
+  pat_ix=setdiff(seq(1,68),npat_ix)
+  shq_fst_pat3<-shq_fst_pat2[pat_ix]
+  shq_fst_npat3<-shq_fst_pat2[npat_ix]
+  
+  #change pathogenicity labels
+  shq_fst_pat3<-lapply(shq_fst_pat3,function(x){
+    x$pathogenicity<-"P"
+    return(x)
+  })
+  shq_fst_npat3<-lapply(shq_fst_npat3,function(x){
+    x$pathogenicity<-"N"
+    return(x)
+  })
+  
+  bls_pat.perm.list[[i]]<-cal_bls_pat(shq_fst_pat3)
+  bls_npat.perm.list[[i]]<-cal_bls_pat(shq_fst_npat3)
+  setTxtProgressBar(pb,i)
+  
+}
+
+bls_pat.perm.df<-bind_rows(bls_pat.perm.list,.id="sno")
+bls_npat.perm.df<-bind_rows(bls_npat.perm.list,.id="sno")
+
+
+bls_pat.perm.merged<-merge(bls_npat.perm.df,bls_pat.perm.df,by=c("sno","branch","branch.type"))
+bls_pat.perm.merged<-bls_pat.perm.merged%>%
+  mutate(diff=length.x-length.y)%>%
+  group_by(sno,branch.type)%>%
+  summarize(diff=mean(diff))
+
+mbls.pat_diff.perm.ci<-bls_pat.perm.merged%>%
+  group_by(branch.type)%>%
+  summarize(median=median(diff),
+            lower=quantile(diff,probs=0.025),
+            upper=quantile(diff,probs=0.975))
+
+#calculate observed values of difference in branch length between pathogenic and non-pathogenic
+shq_fst_pat.obs<-lapply(shq_fst_pat,sample2kids)
+shq_fst_npat.obs<-lapply(shq_fst_npat,sample2kids)
+
+bls_pat.obs<-cal_bls_pat(shq_fst_pat.obs)
+bls_npat.obs<-cal_bls_pat(shq_fst_npat.obs)
+
+bls_pat.obs<-bls_pat.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_npat.obs<-bls_npat.obs%>%
+  group_by(branch.type)%>%
+  summarize(length=mean(length))
+
+bls_pat.obs.merged<-merge(bls_npat.obs,bls_pat.obs,by=c("branch.type"))
+bls_pat.obs.merged<-bls_pat.obs.merged%>%
+  mutate(diff=length.x-length.y)
+
+#calculate p-values
+bls_pat.obs.merged$pvalue<-NA
+for(i in 1:5){
+  branch.name=bls_pat.obs.merged$branch.type[i]
+  #observed value
+  obs.diff<-bls_pat.obs.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  permdiff<-bls_pat.perm.merged%>%
+    filter(branch.type==branch.name)%>%
+    pull(diff)
+  bls_pat.obs.merged$pvalue[i]<-length(which(permdiff>obs.diff))/length(permdiff)
+}
+
+bls_pat.obs.merged<-bls_pat.obs.merged%>%
+  mutate(direction=case_when(diff<0~"down",
+                             diff>0~"up"))
+
+
+
+```
+
+
+```{r plt_patperm}
+
+#plot
+plt_bls_patdiff.perm<-ggplot(bls_pat.perm.merged)+
+  geom_violin(scale="width",
+              trim=T,
+              aes(branch.type,diff,fill=branch.type))+
+  geom_point(data=mbls.pat_diff.perm.ci,
+             aes(branch.type,median),
+             size=2)+
+  geom_errorbar(data=mbls.pat_diff.perm.ci,
+                aes(branch.type,ymin=lower,ymax=upper),
+                width=0.1,
+                size=0.5)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90),
+        legend.position="none",
+        axis.text = element_text(size=14),
+        axis.title = element_text(size=16),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.x=element_blank())+
+  labs(x="Branch type",y="Difference in branch length\n
+       (non-pathogenic - pathogenic)")+
+  geom_errorbar(data=bls_pat.obs.merged,aes(x=branch.type,
+                                         ymin=diff,
+                                         ymax=diff),
+             color="black",
+             width=0.5)+
+  scale_fill_manual(values=c("#fd8f24","#919c4c","#919c4c","#c03728","#f5c041"))+
+  scale_x_discrete(labels=c("Blood-cheek",
+                            "Mother-child1\n(overall)",
+                            "Mother-child2\n(overall)",
+                            "Child-child",
+                            "Mother-Child\n(pre-oocyte split)"))+
+  geom_text(data=bls_pat.obs.merged,aes(
+    x=branch.type,
+    y=max(bls_pat.perm.merged$diff)+0.25,
+    label=format(round(pvalue,
+                       digits=3),
+                 nsmall=3)),
+    size=14/2.8,
+    angle=90)+
+  scale_shape_manual(values=c(25,24))
+
+
+
+
+ggsave(here("../files/Analysis/Branch_stats/plt_bls_patperm_08212019.pdf"),
+       plt_bls_patdiff.perm,
+       height=5,
+       width=4,
+       useDingbats=F)
+
+fwrite(bls_pat.perm.merged,here("../files/Analysis/Branch_stats/dat_bls_patperm_08212018.txt"),sep="\t",col.names=F,quote=F)
+
+
+plt_bls_patdiff.perm
+```
+
+Even though we see a similar pattern here, i.e., non-pathogenic heteroplasmies experience more drift relative to pathogenic heteroplasmies, the difference is not as significant. This might be because pathogenic heteroplasmies are already present at very low frequencies, potentially below a threshold at which selection might operate.
+
+
+### References

@@ -1,0 +1,250 @@
+---
+title: "Directional shifts in heteroplasmy frequency between mother and children"
+author: "Arslan Zaidi"
+date: "8/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The BLS test for selection only compares the *degree* of frequency change for deleterious vs neutral heteroplasmies. It doesn't tell us the direction of change, which is another important piece of information when testing for selection. We would expect negative selection to systematically decrease the frequency of deleterious heteroplasmies (relative to putateively neutral ones) that already exist in a mother's germline. This is what we would like to see here.
+
+## Analysis 
+
+Load relevant packages and source functions to calculate F~st~.
+
+```{r}
+
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(forcats)
+library(KScorrect)
+library(gridExtra)
+library(ape)
+library(here)
+
+source(here("BLS/scripts/abs_functions_03152019.R"))
+
+```
+
+Load master heteroplasmy table and select relevant columns.
+
+```{r}
+
+
+#### load heteroplasmies - conservative (one mother and two children families only) #####
+hq.counts<-fread(here("Data_files/hq_counts_adj_frequency_09272018.txt"),
+                 header=T)
+
+#add unique identifiers to table
+hq.counts<-hq.counts%>%
+  mutate(individual_het_id=paste(hq.counts$individual_id,hq.counts$position,sep="_"),
+         mother_het_id=paste(hq.counts$mother_id,hq.counts$position,sep="_"))
+
+#select specific columns to keep. We don't need all of them.
+hq<-hq.counts%>%
+  select(FID,fam_cat,fam_het_id,mother_id,mot_cat,mother_het_id,individual_id,individual_het_id,tissue_id,position,level,tissue,major,minor,adj.f,cvrg,age_collection,age_birth)
+
+
+```
+
+Annotate heteroplasmies with which genes they are found in and whether they are synonymous/non-synonymous or pathogenic/neutral.
+
+```{r}
+
+##load annotations
+annot<-fread(
+  here("Data_files/hq_adjf_ancestral_syn_pathogenic_03222019.txt"),
+  header=T,
+  sep="\t")
+
+#group genes by functional class
+annot<-annot%>%
+  mutate(region=case_when(gene%in%c("TRNH","TRNL1","TRNW","TRNS2","TRNT","TRNP","TRNV","TRNQ","TRNM","TRNC","TRNK","TRNR","TRNI","TRNN","TRNF","TRND")~"TRNA",
+                          gene%in%c("RNR1","RNR2")~"RNA",
+                          gene%in%c("D-loop1","D-loop2")~"D-loop",
+                          gene%in%c("ND3","ND4","ND5","ND6","CYTB","ND1","ND2","COX1","ATP8","ATP6","COX2","COX3")~"CDS",
+                          gene%in%c("")~""))
+
+#anotate heteroplasmies
+hq<-annot%>%
+  select(fam_het_id,region,gene,fold.d,syn,pathogenicity,ancestral.py,mutant.py)%>%
+  distinct()%>%
+  merge(hq,.,by="fam_het_id",all.x=T)
+
+```
+
+For each individual, estimate the heteroplasmy frequency in their germline by averaging between blood and cheek tissues. Identify mothers and their children and reformat table such that each row is an independent mother-child transmission. This allows us to compare/plot the difference between the heteroplasmi frequency of the mother and child easily.
+
+```{r}
+
+#mothers
+hq.mothers<-hq%>%
+  filter(mot_cat!="")%>%
+  mutate(mother_group=individual_het_id)
+
+#their children
+hq.children<-hq%>%
+  filter(mother_id%in%hq.mothers$individual_id)%>%
+  mutate(mother_group=mother_het_id)
+
+hq.mothers2<-hq.mothers%>%
+  select(fam_het_id,individual_id,individual_het_id,position,tissue,adj.f,cvrg,gene,syn,pathogenicity,ancestral.py,mutant.py)%>%
+  group_by(fam_het_id,individual_id,individual_het_id,position,gene,syn,pathogenicity,ancestral.py,mutant.py)%>%
+  summarize(adj.f=mean(adj.f),
+            cvrg=mean(cvrg))
+
+hq.children2<-hq.children%>%
+  select(mother_id,mother_het_id,tissue,adj.f,cvrg)%>%
+  group_by(mother_id,mother_het_id)%>%
+  summarize(adj.f=mean(adj.f),
+            cvrg=mean(cvrg))
+
+hq.merged<-merge(hq.mothers2,
+                 hq.children2,
+                 by.x="individual_het_id",
+                 by.y="mother_het_id")
+
+```
+
+Only keep heteroplasmies where the ancestral and mutant alleles were determined previously and those that have a frequency of at least 0.2% in the mother's germline. This ensures (to some extent) that the heteroplasmy was polymorphic at the root of the tree and did not arise ~de novo~ in the tree itself.
+
+```{r}
+
+hq.red<-hq.merged%>%
+  filter(ancestral.py%in%c("C","T") & 
+           adj.f.x>=0.002)
+
+table(hq.red$syn)
+
+table(hq.red$pathogenicity)
+
+```
+
+Calculate the difference between the heteroplasmy frequency of the mother and child. Also note down whether it is a decrease or an increase in frequency (from mother to child). This will help give direction to F~st~ later.
+
+```{r}
+
+hq.red<-hq.red%>%
+  mutate(diff=adj.f.y-adj.f.x,
+         sign=case_when(diff>=0 ~ 1,
+                        TRUE~ -1))
+
+```
+
+Calculate F~st~ between the mother's and child's germline for each heteroplasmies. The reason we do this instead of just looking at the raw difference in frequency is because F~st~ is normalized for the initial frequency while the frequency difference is not. Also, calculate divergence (D~xy~) and assign a positive or negative sign to it to indicate whether the frequency is increasing or decreasing.
+
+```{r}
+
+fst_results<-t(
+  mapply(
+    fst_comps,
+    hq.red$adj.f.x,
+    hq.red$adj.f.y,
+    hq.red$cvrg.x,
+    hq.red$cvrg.y))
+
+hq.red$num<-fst_results[,1]
+hq.red$den<-fst_results[,2]
+
+hq.red<-hq.red%>%
+  mutate(fst1=num/den,
+         dxy1=-log(1-fst1),
+         dxy2=case_when(dxy1<0~0,
+                        dxy1>0~dxy1*sign))
+
+```
+
+Plot the **signed** divergence observed between mother and child between synonymous and non-synonymous heteroplasmies across the range of heteroplasmy frequency in the mother's germline. 
+
+```{r}
+
+hq.syn<-hq.red%>%
+  filter(hq.red$syn!="")%>%
+  mutate(syn=case_when(syn=="syn"~"Synonymous",
+                       syn=="nsyn"~"Non-synonymous"))
+
+plt_syn<-ggplot(hq.syn)+
+  geom_segment(aes(x=adj.f.x,
+                   xend=adj.f.x,
+                   y=0,
+                   yend=dxy2,
+                   color=as.factor(sign)))+
+  scale_color_manual(labels=c("Decreasing","Increasing"),
+                     name="Direction of change\nMother->Child",
+                     values=c("Red","Blue"))+
+  theme_bw()+
+  labs(x="Allele frequency in mother",
+       y="Dxy")+
+  facet_wrap(syn~.,scales="free_x",ncol=1)
+
+plt_syn
+
+```
+
+Now, do the same for pathogenic vs non-pathogenic mutations.
+
+```{r}
+
+hq.path<-hq.red%>%
+  filter((pathogenicity=="N" & syn=="syn")|
+           (pathogenicity=="P" & syn=="nsyn"))%>%
+  mutate(pathogenicity=case_when(pathogenicity=="P"~"Pathogenic",
+                       pathogenicity=="N"~"Synonymous"))
+
+hq.path$pathogenicity<-factor(hq.path$pathogenicity,
+                              levels=c("Pathogenic","Synonymous"))
+
+
+plt_path<-ggplot(hq.path)+
+  geom_segment(aes(x=adj.f.x,
+                   xend=adj.f.x,
+                   y=0,
+                   yend=dxy2,
+                   color=as.factor(sign)))+
+  scale_color_manual(labels=c("Decreasing","Increasing"),
+                     name="Direction of change\nMother->Child",
+                     values=c("Red","Blue"))+
+  theme_bw()+
+  labs(x="Allele frequency in mother",
+       y="Dxy")+
+  facet_wrap(pathogenicity~.,scales="free_x",ncol=1)
+
+plt_path
+
+```
+ 
+It seems that the frequency of non-synonymous mutations rises less frequently than synonymous mutations, consistent with negative selection against deleterious heteroplasmies. A similar pattern can be seen with pathogenic and non-pathogenic mutations where the former rises less frequently than the latter. However, it is interesting to note that pathogenic mutations already exist at very low frequency in the mother's tissues.
+
+Let's test this more formally. First, we will test whether the number of positive shifts are less frequent in putatively deleterious mutations compared to neutral expectations. Use a Wilcoxon test for this.
+
+Compare positive shifts between synonymous and non-synonymous mutations.
+
+```{r}
+
+hq.syn2<-table(hq.syn$syn,
+               hq.syn$sign)
+
+fisher.test(hq.syn2,
+            alternative="greater")
+
+```
+
+Non-synonymous mutations are less likely to rise in frequency compared to synonymous mutations.
+
+```{r}
+
+hq.path2<-table(hq.path$pathogenicity,
+                hq.path$sign)
+
+fisher.test(hq.path2,
+            alternative="greater")
+
+```

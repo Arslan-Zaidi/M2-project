@@ -28,6 +28,8 @@ library(tidyr)
 library(kableExtra)
 library(circlize)
 library(here)
+library(kmer)
+library(cowplot)
 
 
 ```
@@ -244,9 +246,136 @@ for(i in 1:nrow(hq)){
 
 #label mutation type (e.g. C>T)
 hq2<-hq%>%
-  mutate(mutation=case_when(ancestral!="undetermined"~paste(ancestral.py,">",mutant.py,sep="")))
+  mutate(mutation=case_when(ancestral!="undetermined"~paste(ancestral,">",mutant,sep="")),
+         mutation.py=case_when(ancestral!="undetermined"~paste(ancestral.py,">",mutant.py,sep="")))
 
 ```
+
+### Mutation spectrum
+
+Let's look at the spectrum. Basically, we would like to see if certain types of mutations (e.g. C>T) are over or underrepresented.
+
+```{r norm_spectrum}
+
+#label mutation type (e.g. C>T)
+hq3<-hq2%>%
+  mutate(mutation=case_when(ancestral!="undetermined"~paste(ancestral,">",mutant,sep="")))
+
+#group mutations by ancestral allele A/T and G/C together
+#summarize number of each mutation type
+dhq3<-hq3%>%
+  filter(ancestral!="undetermined")%>%
+  distinct(FID,position,.keep_all = T)%>%
+  group_by(ancestral.py,mutant.py,mutation.py)%>%
+  summarize(nhets=length(which(maf>0.01)))
+
+#read reference genome rcrs
+rcrs<-read.dna(here("Data_files/rcrs.fasta"),format="fasta")
+
+#summarize base composition in the ref rcrs genome
+base.comp<-base.freq(rcrs)*16569
+base.comp<-data.frame(base=c("A","T","C","G"),
+                      base.comp)
+
+#combine A/T and G/C
+base.comp<-base.comp%>%
+  mutate(base.py=case_when(base%in%c("A","T")~"T",
+                           base%in%c("G","C")~"C"))%>%
+  group_by(base.py)%>%
+  summarise(base.comp=sum(base.comp))
+  
+
+#add A/T and G/C
+
+
+dhq3.2<-left_join(dhq3,
+            base.comp,
+            by=c("ancestral.py"="base.py"))
+
+ddhq3<-dhq3.2%>%
+  ungroup()%>%
+  mutate(exp.nhets=((base.comp/16569) *sum(nhets))/3)
+
+#perform binomial test to see if any are over/underrepresented
+ddhq3$bp<-mapply(FUN=function(a,b){
+  if(is.na(a)=="FALSE"&is.na(c)=="FALSE"){
+    return(binom.test(x=a,n=343,p=b/343)$p.value)}else{
+    return(NA)
+  }},
+  ddhq3$nhets,
+  ddhq3$exp.nhets)
+
+ntests=length(which(is.na(ddhq3$bp)=="FALSE"))
+ddhq3<-ddhq3%>%
+  mutate(ypos=225,
+         sig=case_when(bp<0.05/ntests~"Bonf.",
+                       bp>0.05/ntests&bp<0.05~"No. corr.",
+                       bp>0.05/ntests~"NS"))
+
+mddhq3<-ddhq3%>%
+  select(ancestral.py,mutant.py,mutation.py,
+         base.comp,bp,ypos,sig,nhets,exp.nhets)%>%
+  melt(id.vars=c("ancestral.py",
+                 "mutant.py",
+                 "mutation.py","base.comp","ypos","sig","bp"))
+
+plt_spectrum<-ggplot()+
+  geom_bar(data=mddhq3,aes(mutant.py,
+                 value,
+                 fill=variable
+                 ),
+           stat="identity",
+           position="dodge")+
+  facet_wrap(~ancestral.py,
+             scales="free_x")+
+  geom_point(data=ddhq3,aes(mutant.py,
+                            ypos,
+                            color=sig))+
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        axis.text.x=element_text(size=10),
+        panel.spacing.x = unit(0.1,"lines"),
+        axis.title=element_text(size=16),
+        axis.text.y=element_text(size=14),
+        strip.text = element_text(size=12))+
+  labs(x="Mutant",
+       y="No. of mutations",
+       fill="Count",
+       color="Significance"
+       )+
+  scale_fill_manual(values=c("blue","orange"),
+                          labels=c("Observed",
+                                   "Eexpected"))+
+  scale_color_viridis_d()
+
+ggsave(here("Mutation_spectrum/mutation_spectrum_expvobs.pdf"),
+       plt_spectrum,
+       height=3,
+       width=6)
+
+plt_spectrum
+
+```
+
+It seems that the mutation spectrum is heavily skewed. There are more transitions than transversions compared to expectations. Let's test this formally. 
+
+```{r}
+
+ddhq3<-ddhq3%>%
+  mutate(titv=case_when(mutation.py%in%c("C>T","T>C")~"ti",
+                        TRUE~"tv"))
+
+ddhq3.ti<-ddhq3%>%
+  group_by(titv)%>%
+  summarize(nhets=sum(nhets),
+            exp.nhet=sum(exp.nhets))
+
+#test whether there are more transitions than transversions
+binom.test(x=332,n=343,p=114/343)$p.value
+
+
+```
+
 
 Summarize the mutation spectrum. Specifically, measure the number of each mutation type observed in our data. A heteroplasmy that exists in multiple samples from the same family is treated as a single mutation (representing a single mutation event).
 
@@ -257,7 +386,14 @@ Summarize the mutation spectrum. Specifically, measure the number of each mutati
 dhq<-hq2%>%
   filter(is.na(context.py)=="FALSE")%>%
   distinct(FID,position,.keep_all = T)%>%
-  group_by(mutation,context.py)%>%
+  group_by(ancestral,
+           mutant,
+           mutation,
+           context,
+    ancestral.py,
+           mutant.py,
+           mutation.py,
+           context.py)%>%
   summarize(nhets=length(which(maf>0.01)))
 
 
@@ -267,18 +403,18 @@ mut96<-data.frame(expand.grid(c("A","C","G","T"),
                                 "T>A","T>C","T>G"),
                               c("A","C","G","T")))
 
-colnames(mut96)<-c("p5","mutation","p3")
+colnames(mut96)<-c("p5","mutation.py","p3")
 mut96<-mut96%>%
-  group_by(mutation)%>%
-  mutate(context.py=paste(p5,unlist(strsplit(as.character(mutation),split=""))[1],p3,sep=""))
+  group_by(mutation.py)%>%
+  mutate(context.py=paste(p5,unlist(strsplit(as.character(mutation.py),split=""))[1],p3,sep=""))
 
-dhq2<-left_join(mut96,dhq,by=c("context.py","mutation"))%>%
-  mutate(nhets=replace(nhets,is.na(nhets)=="TRUE",0))
+dhq2<-left_join(mut96,dhq,by=c("context.py","mutation.py"))
   
 #plot mutation context
-context.plt<-ggplot(dhq2,aes(context.py,nhets,fill=mutation))+
+context.plt<-ggplot(dhq2,aes(context.py,nhets,
+                             fill=mutation.py))+
   geom_bar(stat="identity",color="white")+
-  facet_grid(.~mutation,scales = "free_x")+
+  facet_grid(.~mutation.py,scales = "free_x")+
   theme_bw(base_size=12)+
   theme(axis.text.x=element_text(angle=90,family="mono",size=10),
         panel.grid.major.x=element_blank(),
@@ -289,23 +425,168 @@ context.plt<-ggplot(dhq2,aes(context.py,nhets,fill=mutation))+
         legend.position = "none")+
   labs(x="Sequence context",y="Count",fill="Mutation")
 
+
 #fwrite(hq2,"../../../files/Analysis/syn_nsyn_annotation/hq_adjf_ancestral_annotation_11282018.txt",sep="\t",col.names=T,row.names=F,quote=F)
 
-# ggsave("~/Documents/mtproj_files/M2_new/files/Analysis/mutation_spectrum//hq_mutation_context_01292019.pdf",context.plt,height=4,width=10)
+# ggsave(here("Mutation_spectrum/hq_mutation_context_08172019.pdf"),context.plt,height=4,width=10)
 
 context.plt
 
 ```
 
 
+Finally, let's normalize sequence context counts by observed composition of triplets in the rcrs genome. To do so, kmerize (k=3) the rCRS genome and count the occurrence of each triplet. Then normalize the observed counts and plot them. 
+
+```{r}
+#kmerize the reference genome
+#get the number of counts of each triplet in the reference genome
+k3<-kcount(rcrs,k=3)
+k3<-data.table(triplets=colnames(k3),count=k3[1,])
+
+
+#add this info to observed heteroplasmy counts
+dhq2.k3<-left_join(dhq2,k3,
+              by=c("context"="triplets"))
+
+dhq2.k3<-dhq2.k3%>%
+  group_by(context.py,
+           mutation.py,
+           ancestral.py,
+           mutant.py)%>%
+  summarize(nhets=sum(nhets),
+            count=sum(count))
+
+dhq2.k3$total_count=sum(dhq2.k3$count,na.rm=T)
+
+#calculate the expected number of heteroplasmy counts
+dhq2.k3<-dhq2.k3%>%
+  ungroup()%>%
+  mutate(exp.nhets=count/sum(count,na.rm=T)*sum(nhets,na.rm=T))
+
+
+#perform exact binomial test to test whether expected counts are similar to observed counts
+
+dhq2.k3$bp<-mapply(FUN=function(a,b){
+  if(is.na(a)=="FALSE"){
+    return(binom.test(x=a,n=343,p=b/343)$p.value)}else{
+    return(NA)
+  }},
+  dhq2.k3$nhets,
+  dhq2.k3$exp.nhets
+  )
+
+ntests=length(which(is.na(dhq2.k3$bp)=="FALSE"))
+dhq2.k3<-dhq2.k3%>%
+  mutate(ypos=25,
+         sig=case_when(bp<0.05/ntests~"Bonf.",
+                       bp>0.05/ntests&bp<0.05~"No. corr.",
+                       bp>0.05/ntests~"NS"))
+
+mdhq.k3<-dhq2.k3%>%
+  select(mutation.py,
+         context.py,
+         nhets,
+         exp.nhets)%>%
+  melt(.,
+              id.vars=c("mutation.py",
+                        "context.py"))
+
+#plot mutation context
+context.plt2<-ggplot(mdhq.k3)+
+  geom_bar(aes(context.py,
+               value,
+               fill=variable),
+           stat="identity",
+           position="dodge")+
+  geom_point(data=dhq2.k3,
+             aes(context.py,
+                 y=ypos,
+                 color=sig))+
+  facet_wrap(.~mutation.py,scales = "free_x")+
+  theme_bw(base_size=12)+
+  theme(axis.text.x=element_text(angle=90,family="mono",size=10),
+        panel.grid.major.x=element_blank(),
+        panel.spacing.x = unit(0.1,"lines"),
+        axis.title=element_text(size=16),
+        axis.text.y=element_text(size=14),
+        strip.text = element_text(size=12))+
+  labs(x="Sequence context",
+       y="No. of mutations",
+       fill="Count",
+       color="Significance")+
+  scale_fill_manual(values=c("blue","orange"),
+                    labels=c("Observed",
+                             "Expected"))+
+  scale_color_viridis_d()
+
+ggsave(here("Mutation_spectrum/hq_mutation_context_08172019.pdf"),context.plt2,height=4,width=7)
+
+context.plt2
+
+```
+
+```{r}
+
+#combine both plots for supplement
+combined_spectrum<-plot_grid(plt_spectrum,
+          context.plt2,
+          nrow=2,
+          ncol=1,rel_heights = c(0.4,0.6))
+
+ggsave(here('combined_spectrum_plot.pdf'),
+       combined_spectrum,
+       height=7,width=10)
+
+```
+
+Let's test whether T>C mutations are more frequent than C>T mutations as seems to be the case, when we normalize for the base composition in the reference genome.
+
+```{r}
+
+ct.muts<-dhq2.k3%>%
+  filter(mutation.py%in%c("C>T","T>C"))%>%
+  group_by(ancestral.py,mutant.py,mutation.py)%>%
+  summarize(nhets=sum(nhets))
+
+ct.muts<-merge(ct.muts,base.comp,
+               by.x="ancestral.py",
+               by.y="base.py")
+
+ct.muts<-ct.muts%>%
+  ungroup()%>%
+  mutate(exp.nhets=base.comp/16569 * sum(nhets))
+
+binom.test(130,(332),125.5/332)
+
+```
+
+
+Let's test whether C>T mutations are overrepresented in CpG context.
+
+```{r}
+
+cpg<-dhq2.k3%>%
+  filter(is.na(nhets)=="FALSE" & mutation.py=="C>T")%>%
+  mutate(cpg=case_when(context.py%in%c("ACG","TCG","CCG","GCG")~"CpG",
+                       TRUE~"non-CpG"))%>%
+  group_by(cpg)%>%
+  summarize(nhets=sum(nhets),
+            exp.nhets=sum(exp.nhets))
+
+cpg
+
+binom.test(26,130,p=0.107)
+
+```
+
+C>T mutations are overrepresented in CpG context relative to non-CpG context. 
+
 ### Synonymous/non-synonymous annotation of heteroplasmies
 
-Based on whether or not a mutaiton affects the protein sequence, we can annotate it as synonymous or non-synonymous. Also assign each heteroplasmy to a specific gene in the mtDNA. 
+Based on whether or not a mutation affects the protein sequence, we can annotate it as synonymous or non-synonymous. Also assign each heteroplasmy to a specific gene in the mtDNA. 
 
 ```{r syn_annot,cache=TRUE}
 
-#read reference genome rcrs
-rcrs<-read.dna(here("Data_files/rcrs.fasta"),format="fasta")
 
 #mt.code
 mt.code<-getGeneticCode("2")
