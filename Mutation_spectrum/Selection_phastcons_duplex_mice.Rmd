@@ -1,0 +1,168 @@
+---
+title: "Selection test - mouse heteroplasmies (Barbara)"
+author: "Arslan Zaidi"
+date: "01/01/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+Here, we are interested in looking for signatures of selection in mouse mtDNA by studying the distribution of mutations occurring in the mouse mtDNA. We have already shown that hN/hS values for protein-coding genes are within the neutral distribution. Thus, there appears to be no evidence for selection acting against heteroplasmies occurring in these regions. To more fully look at selection acting on all heteroplasmies (including those occurring in non-coding regions), I will now investigate whether heteroplasmies are less likely to occur in conserved regions.
+
+## Methodology
+
+To do this, I downloaded phastCons (PhastCons60wayEuarchontoGlires table) scores from the UCSC genome browser for the mouse reference mtDNA genome. To this, I added the table of mtDNA mutations observed using duplex sequencing.
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(here)
+
+#phastcons scores
+pcons<-fread(here("Mutation_spectrum/mm9_eur_phastcons.txt"),header=F)
+colnames(pcons)<-c("position","phastcons")
+
+#duplex sequencing mutations
+dat<-fread(here("Mutation_spectrum/barb_mutations"),header=T)
+
+#heteroplasmies only
+hq<-dat%>%
+  filter(minor!=".")
+
+hq2=hq%>%
+  distinct(position,major,minor)
+
+pcons2=merge(pcons,hq,by="position",all.x=T)
+
+```
+
+Annotate each position as being either 'heteroplasmic' or not and either 'conserved' or not. Conserved sites are those that have a phastcons score of greater than 0.9 and Not-conserved sites are those that have a phastcons score of less than or equal to 0.1. Plot the distribution of phastcons scores and the median for both heteroplasmic and homoplasmic sites.
+
+```{r}
+
+pcons2=pcons2%>%
+  mutate(heteroplasmy=case_when(is.na(major)=="TRUE"~"n",
+                                TRUE~"h"),
+         conserved=case_when(phastcons>0.9~"conserved",
+                             phastcons<0.1~"not conserved"))
+
+pcons2.sum=pcons2%>%
+  group_by(heteroplasmy)%>%
+  summarize(lower=quantile(phastcons,probs=0.025),
+            upper=quantile(phastcons,probs=0.975),
+            median=quantile(phastcons,probs=0.5))
+
+pcons3=pcons2%>%
+  filter(is.na(conserved)=="FALSE")
+
+ggplot(pcons3)+
+  geom_point(position="jitter",
+             aes(heteroplasmy,phastcons,color=conserved))+
+  geom_point(data=pcons2.sum,aes(heteroplasmy,median),color="black")+
+  theme_bw()+
+  labs(x="Heteroplasmy status",
+       y="PhastCons score")
+
+
+```
+
+It doesn't look like non-heteroplasmic sites have a higher average phastcons score compared to heteroplasmic sites. Let's investigate this more formally using a fisher's Exact test. To do this, make a 2x2 contingency table.
+
+```{r}
+
+cont.table=pcons3%>%
+  group_by(conserved,heteroplasmy)%>%
+  summarize(n=length(phastcons))%>%
+  dcast(conserved~heteroplasmy,value.var="n")
+
+cont.table=cont.table[,-1]
+rownames(cont.table)=c("conserved","not_conserved")
+colnames(cont.table)=c("h","n")
+
+fisher.test(cont.table,alternative = "l")
+
+```
+
+
+Fisher's exact test shows that heteroplasmies are any more likely to occur at non-conserved sites than at conserved sites. Let's test this non-parametrically using a permutation test. To do this, I will 'rotate' the mtDNA genome by a random number and test the association between conservation status and heteroplasmy status. I will calculate the Odd's ratio (odds of observing a heteroplasmy at non-conserved site/odds of observing a heteroplasmy at a conserved site). We expect this number to be significantly greater than 1 in the observed data compared to permuted data.
+
+```{r}
+
+OR=(cont.table[2,1]/sum(cont.table[2,]))/
+  (cont.table[1,1]/sum(cont.table[1,]))
+
+OR
+
+```
+
+
+Turns out, the Odd's ratio is actually less than 1, which means that heteroplasmic sites are more likely to occur at conserved sites rather than non-conserved sites. Let's calculate a one-sided p-value for this to see just how significant this result is.
+
+```{r}
+
+#function to rotate the mtDNA and calculate Odd's ratio
+frotate=function(){
+  
+  step=sample(16297,1)
+  ppcons=pcons2$position+step
+  ppcons[which(ppcons>16296)]=ppcons[which(ppcons>16296)]-16296
+  ppcons.df=cbind(pcons2[ppcons,c(1:5)],pcons2[,6])
+  colnames(ppcons.df)[6]="conserved"
+  pcont.table=ppcons.df%>%
+    filter(is.na(conserved)=="FALSE")%>%
+    group_by(conserved,heteroplasmy)%>%
+    summarize(n=length(phastcons))%>%
+    dcast(conserved~heteroplasmy,value.var="n")
+  
+  pcont.table=pcont.table[,-1]
+  OR=(pcont.table[2,1]/sum(pcont.table[2,]))/
+    (pcont.table[1,1]/sum(pcont.table[1,]))
+  return(OR)
+}
+
+ormat=matrix(NA,10000,ncol=2)
+#pb=txtProgressBar(min=0,max=10000,style=3)
+for(i in 1:1e4){
+  ormat[i,1]=i
+  ormat[i,2]=frotate()
+  #setTxtProgressBar(pb,i)
+}
+
+
+print(length(which(ormat[,2]<OR))/length(ormat[,2]))
+
+ormat=as.data.frame(ormat)
+colnames(ormat)=c("replicate","OR")
+
+pval=length(which(ormat[,2]<OR))/length(ormat[,2])
+
+ggplot()+
+  geom_histogram(data=ormat,aes(OR),
+                 color="black",
+                 fill="white")+
+  theme_bw()+
+  geom_vline(xintercept=OR,color="red")+
+  theme_bw()+
+  theme(panel.grid = element_blank())+
+  annotate(geom="text",
+           x=OR,
+           y=1500,
+           label=paste("Pvalue:",round(pval,2)))+
+  labs(x="Odd's ratio",
+       y="Count")
+
+
+```
+
+So, even though the odd's ratio is less than 1, it is not significantly significant. Thus, there is no strong evidence for or against negative selection acting against heteroplasmies occuring in the mouse mtDNA.
+
+

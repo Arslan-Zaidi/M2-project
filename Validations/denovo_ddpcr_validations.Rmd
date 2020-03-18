@@ -2,53 +2,91 @@
 title: "Heteroplasmy validations with ddPCR"
 author: "Arslan Zaidi"
 date: "7/4/2019"
-output: html_document
+output: 
+  html_document:
+  toc: true
+  toc_float: true
+theme:
+  simplex
+
 ---
 
-```{r}
-
+```{r echo=T, results='hide', message=F, warning=F}
+library(tidyr)
 library(ggplot2)
-library(dplyr)
 library(here)
 library(data.table)
-
+library(dplyr)
 ```
 
+### Introduction
+
+We used a heuristic approach (see manuscript) to detect a number of putative *de novo* germline mutations in our samples using Illumina Sequencing (Miseq). We wanted to validate a few randomly chosen *de novo* mutations using a different methods, droplet digital PCR (ddPCR), which can measure much lower frequencies than other methods such as sanger sequencing. In this notebook, I've presented the code for the ddPCR validation results.
+
+Read in ddPCR and Miseq results. The ddPCR frequency is the mean across three technical replicates. 
 
 ```{r}
 #read in ddPCR results
-ddpcr<-read.table(here("Data_files/denovo_ddPCR_results_10122018.txt"),
+ddpcr<-read.table(here("Data_files/denovo_ddPCR_results_11062019.txt"),
                   header=T,
                   sep="\t")
 
-#calculate average heteroplasmy frequency
-avg.ddpcr<-ddpcr%>%
-  group_by(FID,individual,tissue,position)%>%
-  summarize(ddpcr_f=mean(ddpcr_f),miseq_f=mean(miseq_f))
+## remove rows where the miseq frequency is not present (e.g. hair samples)
+## create individual id from tissue id for plotting
+ddpcr<-ddpcr%>%
+  filter(is.na(miseq_f)=="FALSE")
+
+```
+
+Calculate the correlation and the average deviation between the Miseq and ddPCR frequency. 
+
+```{r}
 
 #calculate correlation b/w Miseq and ddPCR frequency
-rcoef<-round(with(avg.ddpcr,cor(miseq_f,ddpcr_f,use="complete.obs")),2)
+rcoef<-round(with(ddpcr,cor(miseq_f,ddpcr_f,use="complete.obs")),2)
 
 #calculate average deviation
-avg.dev<-round(with(avg.ddpcr,mean(ddpcr_f-miseq_f,na.rm=T)),2)
+avg.dev<-round(with(ddpcr,mean(ddpcr_f-miseq_f,na.rm=T)),3)
 
-cor.plt<-ggplot(avg.ddpcr,aes(miseq_f,ddpcr_f))+
+```
+
+Compare the two frequencies using a scatterplot. 
+
+```{r}
+
+cor.plt<-ggplot(ddpcr,aes(miseq_f,ddpcr_f))+
   geom_point(size=0.6)+
   stat_smooth(method="lm")+
-  geom_abline(intercept=0,slope=1,color="red")+
+  geom_abline(intercept=0,
+              slope=1,
+              color="red")+
   theme_bw()+
-  geom_segment(aes(x=miseq_f,xend=miseq_f,y=miseq_f,yend=ddpcr_f),alpha=0.6)+
-  annotate(geom="text",x=0.01,y=0.075,label=paste("r = ",rcoef,sep=""),size=6)+
-  annotate(geom="text",x=0.01,y=0.07,label=paste("Avg. ddPCR - Miseq = ",avg.dev,sep=""),size=6)+
-  theme(axis.title=element_text(size=15),axis.text=element_text(size=12))+
-  labs(x="Miseq - MAF",y="ddPCR - frequency")
+  geom_segment(aes(x=miseq_f,
+                   xend=miseq_f,
+                   y=miseq_f,
+                   yend=ddpcr_f),
+               alpha=0.6)+
+  annotate(geom="text",
+           x=0.0,
+           y=0.075,
+           label=paste("r = ",rcoef,sep=""),
+           size=5,
+           hjust=0)+
+  annotate(geom="text",
+           x=0.0,
+           y=0.07,
+           label=paste("Avg. ddPCR - Miseq = ",avg.dev,sep=""),
+           size=5,
+           hjust=0)+
+  theme(axis.title=element_text(size=15),
+        axis.text=element_text(size=12))+
+  labs(x="Miseq - minor allele frequency",y="ddPCR - allele frequency")
 
-# ggsave("Denovo_mutation_analysis/miseq_v_ddpcr_validations.pdf",cor.plt,height=7,width=7)
+ggsave(here("Denovo_mutation_analysis/miseq_v_ddpcr_validations_11062019.pdf"),cor.plt,height=7,width=7)
 
 cor.plt
 
 ```
 
-
-In all four cases, only the individual in whom the heteroplasmy was discovered was found to be heteroplasmic (MAF>1%) using ddPCR. No other individual in the family was heteroplasmic. The allele frequency from ddPCR, while highly correlated with Miseq allele frequency, is upwardly biased for some reaosn. 
+Four *de novo* heteroplasmies were identified. In all four cases, only the individual in whom the heteroplasmy was discovered was found to be heteroplasmic (MAF>1%) using ddPCR. No other individual in the family was heteroplasmic. Thus, in all four cases, we validated the heteroplasmy to be *de novo* using an independent method. The allele frequency from ddPCR, while highly correlated with Miseq allele frequency, is upwardly biased for some reason. This needs further investigation. 
 

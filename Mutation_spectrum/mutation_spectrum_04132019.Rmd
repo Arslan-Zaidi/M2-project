@@ -2,7 +2,6 @@
 title: "mutation_spectrum"
 author: "Arslan Zaidi"
 date: "1/29/2019"
-bibliography: mutation_spectrum_01292019.bib
 output:
   html_document:
     toc: true
@@ -13,16 +12,11 @@ output:
     theme: flatly
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
-```
-
-```{r, cache=TRUE}
+```{r, cache=F, warning=FALSE, message=FALSE}
 library(ggplot2)
 library(data.table)
 library(ape)
 library(Biostrings)
-library(dplyr)
 library(ggrepel)
 library(tidyr)
 library(kableExtra)
@@ -30,7 +24,7 @@ library(circlize)
 library(here)
 library(kmer)
 library(cowplot)
-
+library(dplyr)
 
 ```
 
@@ -91,9 +85,6 @@ allele.discordance<-allfam%>%
   select(FID,position,level,tissue,major)%>%
   spread(level,major)
 
-kable(allele.discordance)%>%
-    kable_styling() %>%
-  scroll_box(width = "100%")
 
 ```
 
@@ -135,34 +126,54 @@ hq<-rbind(hq.1,hq.2)
 
 ```
 
-### Heteroplasmy summary statistics
 
-Let's calculate some summary statistics from the heteropasmy data. 
+Get summary statistics presented in the paper.
 
-```{r sum_stats}
+```{r sum_stats, echo=FALSE}
+
+#summary stats
+
+#number of independent mutation events
+print(
+  paste("Number of independent mutation events:",length(unique(hq$fam_het_id))))
+
 #number of unique sites
 uniq_sites=hq%>%
   pull(position)%>%
   unique()
 
-print(length(uniq_sites))
+print(paste("Number of unique sites:",
+            length(uniq_sites)))
 
 #tabulate number of families that carry a heteroplasmy at each site
-uniq_sites_fam<-hq%>%
-  group_by(position)%>%
-  summarize(nfams=length(unique(FID)))
+# uniq_sites_fam<-hq%>%
+#   group_by(position)%>%
+#   summarize(nfams=length(unique(FID)))
 
-uniq_sites_fam
+# print("Number of families carrying a heteroplasmy at each site")
+# uniq_sites_fam
 
 #how many sites are present in one family only
-uniq_sites_fam%>%
+
+print(paste("Number of sites present in one family:",
+            uniq_sites_fam%>%
   filter(nfams==1)%>%
   nrow()
+))
 
 #how many sites are present in >3 families
-uniq_sites_fam%>%
+print(paste("Number of sites present in 2 families:",
+            uniq_sites_fam%>%
+  filter(nfams==2)%>%
+  nrow()
+))
+
+#how many sites are present in >3 families
+print(paste("Number of sites present in >3 families:",
+            uniq_sites_fam%>%
   filter(nfams>=3)%>%
   nrow()
+))
 
 #which sites are these?
 uniq_sites_fam%>%
@@ -175,14 +186,27 @@ uniq_sites_fam%>%
 
 Next, we determined the trinucleotide sequence context of each heteroplasmy. This was done by getting the full sequence of each sample from the "count" file, which contains info on the observed number of each of the four nucleotides at each position.
 
-```{r seq_context,cache=TRUE}
+```{r seq_context, cache=TRUE, warning=F, results='hide', message=F}
 #load count file
-count<-fread(
-  "https://www.dropbox.com/s/gyk54cgek4kooo4/Allruns_08222018.trim.rd.counts?dl=1",
-  header=F,
-  sep="\t")
+
+count<-fread(here("../../M2_new/files/Analysis/variant_calling/trim.rd.counts/Allruns_08222018.trim.rd.counts"),
+             header=F,
+             sep="\t")
+
+#^THIS IS A LOCAL PATH. to access the count file, comment out the above line and uncomment the one below >>
+
+# count<-fread(
+#   "https://www.dropbox.com/s/gyk54cgek4kooo4/Allruns_08222018.trim.rd.counts?dl=1",
+#   header=F,
+#   sep="\t")
 
 colnames(count)<-c('fqid','ref','position','A','C','G','T','a','c','g','t','cvrg','nalleles','major','minor','maf')
+
+```
+
+Generate sequence context for each heteroplasmy
+
+```{r}
 
 #write function to get sequence context from count file
 get.context<-function(fq.id,pos,M){
@@ -348,10 +372,10 @@ plt_spectrum<-ggplot()+
                                    "Eexpected"))+
   scale_color_viridis_d()
 
-ggsave(here("Mutation_spectrum/mutation_spectrum_expvobs.pdf"),
-       plt_spectrum,
-       height=3,
-       width=6)
+# ggsave(here("Mutation_spectrum/mutation_spectrum_expvobs.pdf"),
+#        plt_spectrum,
+#        height=3,
+#        width=6)
 
 plt_spectrum
 
@@ -433,7 +457,6 @@ context.plt<-ggplot(dhq2,aes(context.py,nhets,
 context.plt
 
 ```
-
 
 Finally, let's normalize sequence context counts by observed composition of triplets in the rcrs genome. To do so, kmerize (k=3) the rCRS genome and count the occurrence of each triplet. Then normalize the observed counts and plot them. 
 
@@ -519,7 +542,7 @@ context.plt2<-ggplot(mdhq.k3)+
                              "Expected"))+
   scale_color_viridis_d()
 
-ggsave(here("Mutation_spectrum/hq_mutation_context_08172019.pdf"),context.plt2,height=4,width=7)
+#ggsave(here("Mutation_spectrum/hq_mutation_context_08172019.pdf"),context.plt2,height=4,width=7)
 
 context.plt2
 
@@ -579,7 +602,35 @@ binom.test(26,130,p=0.107)
 
 ```
 
-C>T mutations are overrepresented in CpG context relative to non-CpG context. 
+C>T mutations are overrepresented in CpG context relative to non-CpG context.
+
+Now, let's test whether there is enrichment of heteroplasmies in the Dloop. 
+
+```{r}
+
+dloop_hqn<-hq%>%
+  distinct(fam_het_id,.keep_all=T)%>%
+  mutate(region=case_when(gene%in%c("D-loop1","D-loop2")~"Dloop",
+                          TRUE~"non-D"))%>%
+  group_by(region)%>%
+  summarize(n=length(unique(fam_het_id)))
+
+#get total length of D-loop and that of non-D
+dlength=genedb%>%
+  filter(gene%in%c("D-loop1","D-loop2"))%>%
+  mutate(length=end-start)%>%
+  pull(length)%>%
+  sum()
+
+nondlength=16569-dlength
+
+#calculate expected number of heteroplasmies given the lenght of the region
+dloop_hqn$exp_n<-c(dlength,nondlength)/16569*sum(dloop_hqn$n)
+
+dbtest=binom.test(x=73,n=(346),p=23.43/(346))
+
+
+```
 
 ### Synonymous/non-synonymous annotation of heteroplasmies
 
@@ -740,11 +791,11 @@ hq$syn[which(hq$major.aa!=hq$minor.aa)]<-"nsyn"
 hq.syn<-hq%>%
   select(FID,fqid,position,fq_het_id,major,minor,maf,run,gene,hq.gene.pos,hq.codon.pos,major.codon,minor.codon,major.aa,minor.aa,syn,fold.d,ancestral,mutant,context,ancestral.py,mutant.py,context.py)
 
-fwrite(hq,
-       here("Data_files/hq_adjf_ancestral_syn_11282018.txt"),
-       sep="\t",
-       col.names=T,
-       row.names=F,quote=F)
+# fwrite(hq,
+#        here("Data_files/hq_adjf_ancestral_syn_11282018.txt"),
+#        sep="\t",
+#        col.names=T,
+#        row.names=F,quote=F)
 
 
 
@@ -1027,4 +1078,3 @@ p1
 ```
 
 
-### References

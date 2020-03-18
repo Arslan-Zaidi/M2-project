@@ -13,7 +13,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-```{r}
+```{r echo=TRUE,warnin=FALSE,message=FALSE,results='hide'}
 
 library(data.table)
 library(dplyr)
@@ -212,8 +212,8 @@ hq.ndenovo.per.ind2<-rbind(hq.ndenovo.per.ind2.bl,
 bl.beta2<-summary(hq.age.c2.bl)$coefficients[2]
 ch.beta2<-summary(hq.age.c2.ch)$coefficients[2]
 
-bl.p2<-summary(hq.age.c2.bl)$coefficients[8]
-ch.p2<-summary(hq.age.c2.ch)$coefficients[8]
+bl.p2<-pnorm(summary(hq.age.c2.bl)$coefficients[2,3],lower.tail = F)
+ch.p2<-pnorm(summary(hq.age.c2.ch)$coefficients[2,3],lower.tail = F)
 
 
 #make data.frame for glm results

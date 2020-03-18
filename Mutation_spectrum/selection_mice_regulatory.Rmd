@@ -1,0 +1,119 @@
+
+---
+title: "Tets of enrichment for mouse heteroplasmies in regulatory regions"
+author: "Arslan Zaidi"
+date: "02/13/2020"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+---
+
+### Introduction
+
+As per the reviewer's suggestion, we would like to test whether there is a depletion of observed heteroplasmies in regulatory regions of the D-loop compared to the non-regulatory region of the D-loop. The idea is that because of the known functional importance of regulatory regions, fewer mutations might be observed in these regions due to purifying selection. However, if there is no depletion, it does not mean selection does not operate on these regions, just that there hasn't been enough time for selection to remove these mutations or that we are observing the true mutation spectrum without the action of selection.
+
+### Methodology
+
+To test this, I downloaded start and stop positions for 5 regulatory regions in mice (ETAS1, ETAS2, CSB1, CSB2, and CSB3) from the mouse mtDNA genbank file (accession number: NC_005089.1). Then, I tested using either the $\chi^2$ test or Fisher's exact test whether there was an enrichment of mutations in regulatory regions relative to non-regulatory regions of the D-loop.
+
+```{r}
+
+library(data.table)
+library(dplyr)
+library(here)
+
+#duplex sequencing mutations
+dat<-fread(here("Mutation_spectrum/barb_mutations"),header=T)
+
+
+```
+
+Specify start and stop positions for the regulatory and non-regulatory regions of the D-loop.
+
+```{r}
+
+reg_regions=data.table(
+  region=rep("Regulatory",5),
+  name=c("ETAS1","ETAS2","CSB1","CSB2","CSB3"),
+  start=c(15451,15515,16035,16089,16114),
+  stop=c(15509,15558,16058,16104,16131)
+)
+
+d_regions=data.table(
+  region=rep("Dloop",6),
+  name=rep("Dloop",6),
+  start=c(15423,15510,15559,16059,16105,16132),
+  stop=c(15450,15514,16034,16088,16113,16299)
+)
+
+dloop=rbind(d_regions,reg_regions)
+
+```
+
+
+Calculate the length of each region. This will be important later to generate expected numbers of mutations. 
+
+```{r}
+
+dloop=dloop%>%
+  mutate(length=stop-start)
+
+dloop.sum=dloop%>%
+  group_by(region)%>%
+  summarize(length=sum(length))
+
+dloop.sum
+
+```
+
+
+Annotate heteroplasmies with which region they belong in and then calculate the observed number of heteroplasmies within each region.
+
+```{r}
+
+dat$name=NA
+dat$region=NA
+for(i in 1:nrow(dloop)){
+  ix=which(dat$position > dloop$start[i] & dat$position < dloop$stop[i])
+  dat$region[ix]=dloop$region[i]
+  dat$name[ix]=dloop$name[i]
+}
+
+dat.sum=dat%>%
+  group_by(region)%>%
+  summarize(n=length(which(minor!=".")))
+
+dat.sum
+
+
+```
+
+Calculate the expected number of heteroplasmies based on the length of each region. 
+
+```{r}
+
+dloop.sum=merge(dloop.sum,dat.sum)
+dloop.sum=dloop.sum%>%
+  mutate(exp.n=length/sum(length)*sum(n))
+
+dloop.sum
+
+```
+
+
+Perform the $\chi^2$ test of independence and Fisher's exact test to determine if there is a non-random distribution of heteroplasmies between regulatory and non-regulatory regions.
+
+
+```{r}
+
+
+chisq.test(dloop.sum[,c(3,4)])
+
+fisher.test(dloop.sum[,c(3,4)])
+
+```
+
+
+The non-significant P-values tell us that the distribution of heteroplasmies appears to be random with respect to the functional annotation within the D-loop. This result is consistent with our other tests showing that there appears to be no evidence of puriying selection on this set of heteroplasmies. Therefore, the distribution of heteroplasmies observed offers a snapshot of the mutation spectrum without the effects of selection.
+

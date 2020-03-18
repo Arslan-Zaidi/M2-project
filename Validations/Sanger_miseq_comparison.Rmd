@@ -2,27 +2,39 @@
 title: "Heteroplasmy validation with Sanger sequencing"
 author: "Arslan Zaidi"
 date: "7/4/2019"
-output: html_document
+output: 
+  html_document:
+  toc: true
+  toc_float: true
+theme:
+  readable
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 
-
-```{r}
+```{r echo=T, results='hide', message=F, warning=F}
 library(ggplot2)
 library(data.table)
 library(here)
 
 ```
 
+### Introduction
+
+Here, we wanted to validate all heteroplasmies detected using Illumina sequencing (Miseq) at minor allele frequency (MAF) > 0.1 using Sanger sequencing and measure the correlation in heteroplasmy fraction across the two sequencing methods.
+
+
+Read the heteroplasmy frequency from Miseq and Sanger sequencing.
+
 ```{r}
 
 sanger<-read.table(here("Data_files/sanger_miseq_comparison.txt"),
                    header=T,
                    sep="\t")
+```
 
+Calculate the correlation and mean difference between Sanger and Miseq frequency and plot the correlation.
+
+```{r}
 #calculate correlation b/w sanger and miseq frequency
 f.cor<-with(sanger,cor(maf,adjusted_sanger_f))
 #calculate average error between sanger and miseq frequency
@@ -43,3 +55,6 @@ cor.plt
 
 
 ```
+
+
+As seen in this plot, the heteroplasmy frequency is highly correlated between Illumina and Sanger sequencing.

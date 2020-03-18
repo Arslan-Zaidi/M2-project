@@ -5,12 +5,8 @@ date: "6/28/2019"
 output: pdf_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 
-
-```{r load_libraries}
+```{r load_libraries, message=FALSE,results="hide",warning=FALSE}
 
 library(data.table)
 library(ggplot2)
@@ -21,20 +17,29 @@ library(here)
 
 ```
 
+### Introduction
+
+Here, we explore the correlation in heteroplasmy frequency across different tissues from the same person and between the tissue of a mother and her children.
 
 ```{r read_files}
 
+#read heterplasmy counts
 hq.counts<-fread(
   here("Data_files/hq_counts_adj_frequency_09272018.txt"),
   header=T)
 
+#create individual heteroplasmy ids
 hq.counts$individual_het_id<-paste(hq.counts$individual_id,hq.counts$position,sep="_")
+
+#assign a mother's heteroplasmy id to each individual
 hq.counts$mother_het_id<-paste(hq.counts$mother_id,hq.counts$position,sep="_")
+
 #keep only heteroplasmies
 hq<-hq.counts[,c('FID','mother_id','mot_cat','mother_het_id','individual_id','individual_het_id','tissue_id','position','level','tissue','major','minor','adj.f','age_collection','age_birth','mot_cat')]
 
 ```
 
+We need to do some data wrangling to plot these. Pivot the dataframe so each individual's blood and cheek frequencies are in separate columns. Then, calculate and plot the correlation between the heteroplasmy frequency from blood and cheek tissues across all individuals.
 
 ```{r plt_tissue_corr}
 
@@ -77,7 +82,9 @@ plt.2t
 
 ```
 
+The heteroplasmy frequencies are highly correlated between the blood and cheek tissues of an indivudl. There is little drift in heteroplasmy frequency between blood and cheek tissues since their divergence during development.
 
+Now, we do the same thing for mothers ad children separately. 
 
 ```{r split_tissue_corr}
 #calculate the correlation between a mother's tissues and child's tissues separately
@@ -145,6 +152,7 @@ child.plt<-
 
 ```
 
+Next, merge the dataframe for mothers and children so that each heteroplasmy is a single row and its frequency in all four tissues (2 mother and 2 for each child) is displayed in different columns. Then, plot the correlation in heteroplasmy frequency between mothers and children.
 
 ```{r mother_child}
 #plot mother against child
@@ -189,6 +197,7 @@ cheek.plt<-
   theme(axis.title=element_text(size=14))
 ```
 
+Combine all plots into one.
 
 ```{r quartet_plot}
 
@@ -201,3 +210,5 @@ quartet.plt<-grid.arrange(mother.plt,
 quartet.plt
 # ggsave("files/Analysis/PNAS_styled_analyses/af_correlation_plots/quartet_plots_09142018.pdf",quartet.plt,height=10,width=10)
 ```
+
+As shown, there is a greater correlation between the two tissues of the same person than between a mother and a child because of the germline bottleneck.
